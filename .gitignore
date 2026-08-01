@@ -1,0 +1,29 @@
+# Python缓存与构建产物
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage*
+htmlcov/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# 本机配置、输入和运行输出
+.env
+*.xlsx
+*.xls
+*.csv
+*.parquet
+runs/
+08_output/
+
+# 内部需求、设计、实施和复核记录
+docs/
+
+# 依赖本机真实文件或内部路径的验收测试
+tests/test_real_input_compatibility.py
+tests/test_jingrong_balance_compatibility.py
+tests/test_self_contained_skill.py
+tests/test_skill_guidance.py

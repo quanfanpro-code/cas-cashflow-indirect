@@ -1,0 +1,167 @@
+---
+name: cas-cashflow-indirect
+description: Use when the user needs to prepare, resume, inspect, or explain a Chinese Accounting Standards cash flow statement supplementary schedule using the indirect method from a standardized journal and trial balance, including 现金流量表附表、净利润调节、序时账、标准模式、急速模式、续跑、人工升级、Excel、AI分类、余额桥接或直接法总对账。
+---
+
+# 中国企业会计准则现金流量表（间接法）
+
+## 核心原则
+
+调用本 Skill 内的验证引擎完成计算。Skill只负责编排、AI判断和结果说明；不复制16项规则，不用第16项倒轧，不把普通不确定性推给人工。
+
+当前`SKILL.md`所在目录是技能根目录。计算引擎、规则、协议、准则原文、知识库和测试都必须从技能根目录读取，不得依赖桌面开发项目。
+
+启动器位于`<技能根目录>\scripts\engine_launcher.py`，选择器位于`<技能根目录>\scripts\select_paths.py`。
+
+## 选择工作模式
+
+| 用户目的 | 执行 |
+|---|---|
+| 新建附表 | 用选择器运行`prepare` |
+| 继续等待AI或重新输出 | 用选择器运行`run-dir` |
+| 查看状态或解释差异 | 用选择器运行`run-dir` |
+
+凡需用户提供文件或目录，必须使用选择器弹出Windows窗口，不要求用户手工填写路径。用户取消选择时停止本次动作并说明取消项，不猜测路径。
+
+续跑目录必须包含`run_state.json`。选择器返回`status=invalid`时说明用户选中了交付目录而不是可续跑目录，重新弹窗选择；不得把`08_output`或单独固化的Excel交付目录传给`status`、`finalize`。
+
+## 新建附表
+
+1. 打开选择窗口前，先提醒用户只能选择经过既有“序时账分析器”处理、包含对方科目和匹配类型的标准序时账，原始序时账不能直接使用。
+2. 运行选择器，取得标准序时账、余额表和输出目录。
+3. 确认序时账包含对方科目和匹配类型。缺少时，停止本次计算并告诉用户先用既有“序时账分析器”生成标准序时账；不要重做对方科目匹配。
+4. 从用户资料中提取主体、期间和可选的直接法经营活动现金净流量。净利润必须由客户明确提供或确认；当前任务缺少时必须主动询问客户，不得根据序时账推算值代填。序时账推算净利润只能用于核对。实际执行重要性缺少时同样主动询问。
+5. 读取技能根目录内以下文件：
+   - 输入映射：`references\协议\现金流量表附表间接法_正式输入协议.md`
+   - AI判断：`references\业务规则\现金流量表附表16个调节项目处理规则_复核确认稿.md`
+   - 逐项取数：`references\业务规则\现金流量表附表间接法逐项取数规则_确认稿.md`
+   - AI留痕：`references\协议\现金流量表附表间接法_JSONL计算留痕协议.md`
+   - 输出解释：`references\协议\现金流量表附表间接法_正式输出协议.md`
+6. **🔴 CHECKPOINT 输出模式询问（必做）**：正式输出前，必须向客户说明两种输出模式并让客户选择：
+   - **标准模式**：1张结果表＋1张全量序时账＋16张项目底稿共18张工作表，便于逐行核查，但生成较慢；
+   - **急速模式**：xlsx只含“附表结果＋简报”2个工作表，16个项目底稿以同名Markdown文件输出，生成极快（秒级），适合快速查看结果，逐行核查不如标准模式直观。
+   客户选择后，把模式写入配置（`output_mode`取`standard`或`rapid`）。客户未明确选择时不得擅自决定。
+7. 在本次工作目录生成UTF-8 with BOM配置JSON。固定使用：
+   - `rules_path`：技能根目录下`rules\cas_general_v1.json`
+   - `protocol_version`：`1.0`
+   - `code_version`：本次Skill版本或明确标识
+   - `journal_preprocessing_confirmed`：完成标准序时账提醒和字段检查后写`true`
+   - `net_profit_user_confirmed`：客户明确提供或确认净利润后写`true`
+   - `net_profit_source`：客户直接提供写`user_provided`；客户确认报表金额写`user_confirmed_statement`
+   - `net_profit_source_note`：记录客户提供方式或所确认的报表来源，不得留空
+8. 运行：
+
+```powershell
+python -X utf8 "<技能根目录>\scripts\engine_launcher.py" prepare --config <配置JSON>
+```
+
+## 处理AI请求
+
+状态为`awaiting_ai`时逐条处理`ai_requests.jsonl`。
+
+**REQUIRED SUB-SKILL:** 必须使用`chen-yiwei-perspective`。
+
+**必须在判断前读取并遵循技能内参考资料，禁止凭常识乱判断。** 每个结论必须引用知识库或准则原文的具体条款/章节作为依据，只使用财政部等一手来源支持会计结论。
+
+查证顺序（每一条都必须按序完成）：
+
+1. `rules\cas_general_v1.json`中的确定性规则；
+2. `references\知识库\知识库_现金流量表相关内容汇编.md`（本技能知识库，优先读取）；
+3. `references\准则原文`中的财政部准则原文和来源索引；
+4. 财政部网站发布的当前有效原文和实施问答。
+
+知识库与财政部当前有效原文冲突时，以财政部当前有效原文为准。AI或人工弄不清楚时也必须先完成上述查证；AI必须保留唯一首选建议、理由、支持证据、相反证据和金额影响，不能只写“待人工判断”。
+
+每个请求必须返回：唯一首选项目、金额、纳入或排除、建议、理由、支持证据、相反证据、未采用备选分类、适用规则、经营活动现金流量影响、置信度和模型留痕。
+
+遵守以下门槛：
+
+- 确定性规则能够唯一处理时不生成新的人工事项；
+- AI必须给出唯一建议，不保留“待判断”金额；
+- 只有金额达到实际执行重要性且存在强冲突证据时才将`human_review_required`设为真；
+- 即使升级人工，也必须保留AI首选、理由和金额影响；
+- AI结论校验失败时根据错误修正并重试，最多两次；不得跳过校验或扩大金额。
+
+生成UTF-8 with BOM的AI结论JSONL后运行：
+
+```powershell
+python -X utf8 "<技能根目录>\scripts\engine_launcher.py" finalize --run-dir <运行目录> --ai-decisions <AI结论JSONL>
+```
+
+没有AI请求时，省略`--ai-decisions`。
+
+## 续跑和查看
+
+对已选运行目录执行：
+
+```powershell
+python -X utf8 "<技能根目录>\scripts\engine_launcher.py" status --run-dir <运行目录>
+```
+
+状态为`awaiting_ai`时继续“处理AI请求”。状态为`invalidated`且`invalidated_inputs`包含`input_source_confirmation`时，说明旧运行缺少输入来源确认，必须重新向客户取得净利润及其来源并新建运行；不得继续旧检查点。其他`invalidated`状态重新选择已经变化的账簿或规则并新建运行，不复用旧结论。状态为`blocked`时读取`08_output\reconciliation.json`和异常表，说明真实差异及一个明确修复动作。
+
+## 正式交付门槛
+
+同时满足以下条件才称为正式完成：
+
+- 运行状态为`exported`；
+- `unclassified_amount_minor`为0；
+- `exclusive_conflict_count`为0；
+- `reconciliation.status`为`pass`；
+- 输出清单哈希验证通过。
+
+否则只交付诊断结果，不称为正式完成。
+
+运行状态和成果性质必须分开说明：`status=exported`只表示文件已经成功生成；`completion_status=formal_completed`才表示正式核对完成。缺少主表直接法经营活动现金流量净额时，仍输出完整底稿，但`completion_status=diagnostic_only`，工作簿显示“仅诊断、待总对账”。
+
+向用户优先提供：
+
+1. `现金流量表附表计算结果.xlsx`；
+2. 间接法经营活动现金流量净额；
+3. 直接法与间接法差异；
+4. AI判断数量和人工升级数量；
+5. 若阻断，只给一个最优先的下一动作。
+
+正式工作簿固定为18张可见工作表：1张“附表结果”＋1张“全量序时账”＋16张项目底稿（`01资产减值准备`至`16其他明确调整`）。每张项目底稿只展示本项目候选行（命中、排除、改归）并逐行注释，顶部统计未命中数量；“全量序时账”表完整保存输入序时账全部行并标注每行的候选项目，供人工复核相关行完整性。结果表与项目底稿之间有32个双向内部链接（16进入＋16返回）。判断理由、AI建议、正反证据和金额占用统一保存在`06_decisions\decision_trace.parquet`，工作簿逐行注释引用该轨迹，不在工作簿内重复计算。
+
+正式输出结构和判断轨迹字段见`references\协议\现金流量表附表间接法_正式输出协议.md`与`references\协议\现金流量表附表间接法_JSONL计算留痕协议.md`；16项规则口径见`references\业务规则`目录和`rules\cas_general_v1.json`，以技能根目录为准，不得依赖桌面旧项目。
+
+## 常见错误与失败恢复
+
+### 🛟 输入与流程失败
+
+| 触发条件 | 一线修复 | 仍失败兜底 |
+|---|---|---|
+| 用户选择了原始序时账（无对方科目/匹配类型） | 停止计算，提醒先运行既有序时账分析器 | 用户坚持使用 → 拒绝开始并说明后果，不重做对方科目匹配 |
+| 净利润缺失或未确认 | 主动询问客户并提供/确认 | 客户不提供 → 不做正式计算，只允许诊断 |
+| 选择器返回`status=invalid`（选了交付目录） | 重新弹窗选择可续跑目录 | 连续选错 → 停止并说明必须选含`run_state.json`的目录 |
+| 输入文件在运行中途变化 | 新建运行批次，不复用旧检查点 | 用户要求沿用旧结论 → 拒绝并解释新旧数据混用风险 |
+| 缺少直接法主表金额 | 先做诊断计算 | 客户确认无法提供 → 结果不得称为正式完成 |
+
+### 🛟 AI 与计算失败
+
+| 触发条件 | 一线修复 | 仍失败兜底 |
+|---|---|---|
+| AI结论校验失败 | 根据错误修正并重试（最多两次） | 两次仍失败 → 停止该请求并报告校验错误，不得跳过校验或扩大金额 |
+| 无法唯一确定适用规则 | 按查证顺序读规则→准则原文→知识库→财政部 | 仍不唯一 → 保留AI唯一首选和理由，不写“待人工判断” |
+| 知识库与财政部原文冲突 | 以财政部当前有效原文为准 | 原文也查不到 → 明确说“不确定”，按最保守口径并说明依据 |
+
+### 🛟 输出与模式失败
+
+| 触发条件 | 一线修复 | 仍失败兜底 |
+|---|---|---|
+| 输出模式客户未表态 | 🔴 CHECKPOINT：必须暂停询问，不得擅自决定 | 客户表示无所谓 → 默认标准模式并说明 |
+| Excel工作簿被占用或写入失败 | 按输出状态提示重试输出阶段 | 机器结果已保留（JSON/Parquet/JSONL）→ 只重试Excel，不重算 |
+| 生成后结构校验失败（断链/超限） | 按错误信息修正输入或配置 | 校验失败 → 不标记输出完成，保留诊断 |
+| 序时账行数超单表上限 | 提示拆分序时账 | 用户无法拆分 → 用急速模式（MD不受行数限制影响） |
+
+## 🔴 CHECKPOINT 工具自检（运行前必须执行，不得跳过）
+
+每次运行前先自检环境和依赖，缺库时先让agent装好再继续，不得跳过：
+
+```powershell
+python -X utf8 "<技能根目录>\scripts\engine_launcher.py" --self-check
+python -X utf8 "<技能根目录>\scripts\select_paths.py" --self-check
+```
+
+自检报告包含`dependencies`字段（pandas、pyarrow、openpyxl、xlsxwriter）。若`status`为`missing_dependencies`，按报告中的`install_hint`让agent执行`pip install`安装缺失库，安装完成并重新自检通过后再开始计算。

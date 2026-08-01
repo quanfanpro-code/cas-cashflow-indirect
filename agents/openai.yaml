@@ -1,0 +1,4 @@
+﻿interface:
+  display_name: "中国企业会计准则现金流量表（间接法）"
+  short_description: "用标准序时账和余额表自动编制并核对现金流量表补充资料"
+  default_prompt: "使用 $cas-cashflow-indirect 根据标准序时账和余额表编制现金流量表间接法附表。"

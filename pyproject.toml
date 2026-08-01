@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cashflow-indirect"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=3.0,<4",
+  "pyarrow>=25,<26",
+  "openpyxl>=3.1,<4",
+  "xlsxwriter>=3.2,<4",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q -m \"not performance\""
+markers = [
+  "performance: 10万行性能基线，默认全量测试不运行",
+]
