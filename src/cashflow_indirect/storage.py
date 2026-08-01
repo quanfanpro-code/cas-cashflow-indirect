@@ -38,6 +38,36 @@ def _canonical_json(value: object) -> str:
     )
 
 
+def event_hash(event: dict) -> str:
+    payload = {key: value for key, value in event.items() if key != "event_hash"}
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def validate_event_chain(path: Path) -> None:
+    path = Path(path)
+    if not path.exists():
+        return
+    previous_hash = "0" * 64
+    for expected_sequence, line in enumerate(
+        path.read_text(encoding="utf-8-sig").splitlines(),
+        start=1,
+    ):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"事件留痕第{expected_sequence}行不是合法JSON") from exc
+        if int(event.get("sequence_no", 0)) != expected_sequence:
+            raise ValueError("事件留痕序号不连续")
+        if event.get("previous_event_hash") != previous_hash:
+            raise ValueError("事件留痕前序哈希不一致")
+        actual_hash = event_hash(event)
+        if event.get("event_hash") != actual_hash:
+            raise ValueError("事件留痕哈希校验失败")
+        previous_hash = actual_hash
+
+
 class RunStore:
     def __init__(
         self,
@@ -173,27 +203,39 @@ class RunStore:
 
     def append_events(self, events: list[dict]) -> Path:
         target = self._target("07_audit", "events.jsonl")
-        last_sequence = 0
-        if target.exists():
-            lines = [
-                line
-                for line in target.read_text(encoding="utf-8-sig").splitlines()
-                if line.strip()
-            ]
-            if lines:
-                last_sequence = int(json.loads(lines[-1])["sequence_no"])
-        expected = list(range(last_sequence + 1, last_sequence + len(events) + 1))
-        actual = [int(event["sequence_no"]) for event in events]
-        if actual != expected:
-            raise ValueError(f"事件序号必须连续，期望{expected}，实际{actual}")
         serialized = "".join(
             json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n"
             for event in events
         )
-        with self.writer_lock(), target.open("a", encoding="utf-8", newline="\n") as stream:
-            stream.write(serialized)
-            stream.flush()
-            os.fsync(stream.fileno())
+        with self.writer_lock():
+            validate_event_chain(target)
+            last_sequence = 0
+            previous_hash = "0" * 64
+            if target.exists():
+                lines = [
+                    line
+                    for line in target.read_text(encoding="utf-8-sig").splitlines()
+                    if line.strip()
+                ]
+                if lines:
+                    last_event = json.loads(lines[-1])
+                    last_sequence = int(last_event["sequence_no"])
+                    previous_hash = str(last_event["event_hash"])
+            expected = list(
+                range(last_sequence + 1, last_sequence + len(events) + 1)
+            )
+            actual = [int(event["sequence_no"]) for event in events]
+            if actual != expected:
+                raise ValueError(f"事件序号必须连续，期望{expected}，实际{actual}")
+            if events and events[0].get("previous_event_hash") != previous_hash:
+                raise ValueError("事件留痕前序哈希不一致")
+            for event in events:
+                if event.get("event_hash") != event_hash(event):
+                    raise ValueError("事件留痕哈希校验失败")
+            with target.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(serialized)
+                stream.flush()
+                os.fsync(stream.fileno())
         return target
 
     def complete_stage(

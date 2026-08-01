@@ -100,10 +100,48 @@ def test_events_must_continue_from_the_previous_sequence(tmp_path):
     store = storage.RunStore.create(
         tmp_path, sample_spec(), {"journal": "a"}, "r1", "c1"
     )
-    store.append_events([{"sequence_no": 1, "event_type": "created"}])
+    first = {
+        "sequence_no": 1,
+        "previous_event_hash": "0" * 64,
+        "event_type": "created",
+    }
+    first["event_hash"] = storage.event_hash(first)
+    store.append_events([first])
 
     with pytest.raises(ValueError, match="事件序号"):
-        store.append_events([{"sequence_no": 3, "event_type": "skipped"}])
+        skipped = {
+            "sequence_no": 3,
+            "previous_event_hash": first["event_hash"],
+            "event_type": "skipped",
+        }
+        skipped["event_hash"] = storage.event_hash(skipped)
+        store.append_events([skipped])
+
+
+def test_event_chain_validation_detects_tampering(tmp_path):
+    path = tmp_path / "events.jsonl"
+    first = {
+        "sequence_no": 1,
+        "previous_event_hash": "0" * 64,
+        "run_id": "run-1",
+        "stage": "prepare",
+        "event_type": "created",
+        "payload": {},
+    }
+    first["event_hash"] = storage.event_hash(first)
+    path.write_text(
+        json.dumps(first, ensure_ascii=False) + "\n",
+        encoding="utf-8-sig",
+    )
+    storage.validate_event_chain(path)
+
+    first["payload"] = {"changed": True}
+    path.write_text(
+        json.dumps(first, ensure_ascii=False) + "\n",
+        encoding="utf-8-sig",
+    )
+    with pytest.raises(ValueError, match="哈希"):
+        storage.validate_event_chain(path)
 
 
 def test_second_writer_is_rejected_while_run_is_locked(tmp_path):

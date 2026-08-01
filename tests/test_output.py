@@ -5,10 +5,13 @@ from types import SimpleNamespace
 import openpyxl
 import pandas as pd
 import pytest
+from xlsxwriter.exceptions import FileCreateError
 
 import cashflow_indirect.output as output_module
 from cashflow_indirect.output import OutputExportError, export_results
+from cashflow_indirect.output import publish_audit_evidence
 from cashflow_indirect.reconciliation import calculate_summary, reconcile_all
+from cashflow_indirect.storage import event_hash
 
 
 @pytest.fixture
@@ -330,6 +333,60 @@ def test_excel_value_error_marks_failed_and_preserves_machine_outputs(
     assert (output_dir / "adjustment_summary.parquet").exists()
 
     monkeypatch.setattr(output_module, "write_audit_workbook", original)
+
+
+def test_xlsxwriter_file_create_error_is_recorded_as_retryable(
+    completed_result,
+    monkeypatch,
+):
+    output_dir = completed_result["output_dir"]
+
+    def occupied_workbook(*args, **kwargs):
+        raise FileCreateError("目标工作簿正在被Excel占用")
+
+    monkeypatch.setattr(output_module, "write_audit_workbook", occupied_workbook)
+
+    with pytest.raises(OutputExportError, match="机器结果已保留"):
+        export_results(**completed_result)
+
+    failed_status = json.loads(
+        (output_dir / "output_status.json").read_text("utf-8-sig")
+    )
+    assert failed_status["status"] == "failed"
+    assert failed_status["retryable"] is True
+    assert "正在被Excel占用" in failed_status["error"]
+
+
+def test_audit_events_and_index_are_added_to_output_manifest(completed_result):
+    output_dir = completed_result["output_dir"]
+    export_results(**completed_result)
+    events_path = completed_result["run_store"].root / "07_audit" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    event = {
+        "sequence_no": 1,
+        "previous_event_hash": "0" * 64,
+        "run_id": "run-test",
+        "stage": "finalize",
+        "event_type": "run_completed",
+        "payload": {"item_no": 1, "fragment_id": "f-1"},
+    }
+    event["event_hash"] = event_hash(event)
+    events_path.write_text(
+        json.dumps(event, ensure_ascii=False) + "\n",
+        encoding="utf-8-sig",
+    )
+
+    manifest = publish_audit_evidence(output_dir, events_path)
+
+    entries = {entry["path"]: entry for entry in manifest["files"]}
+    assert {"events.jsonl", "event_index.parquet"} <= set(entries)
+    assert entries["events.jsonl"]["sha256"] == output_module.sha256_file(
+        output_dir / "events.jsonl"
+    )
+    index = pd.read_parquet(output_dir / "event_index.parquet")
+    assert index.loc[0, "event_hash"] == event["event_hash"]
+    assert index.loc[0, "fragment_id"] == "f-1"
+    assert bool(index.loc[0, "active"]) is True
 
 
 

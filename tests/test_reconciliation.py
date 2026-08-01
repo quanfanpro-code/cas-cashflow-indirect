@@ -125,10 +125,23 @@ def test_summary_rejects_unknown_item_instead_of_silently_dropping(rule_book):
 
 def test_reconciliation_inputs_are_calculated_from_frozen_evidence():
     journal = pd.DataFrame(
-        [{"debit_minor": 100, "credit_minor": 100}]
+        [
+            {
+                "voucher_id": "v1",
+                "account_code": "1001",
+                "debit_minor": 100,
+                "credit_minor": 100,
+            }
+        ]
     )
     trial_balance = pd.DataFrame(
-        [{"period_debit_minor": 90, "period_credit_minor": 100}]
+        [
+            {
+                "account_code": "1001",
+                "period_debit_minor": 90,
+                "period_credit_minor": 100,
+            }
+        ]
     )
     committed = pd.DataFrame(
         [
@@ -173,10 +186,12 @@ def test_reconciliation_inputs_are_calculated_from_frozen_evidence():
             },
             {
                 "family": "deferred_tax",
+                "account_type": "deferred_tax_asset",
                 "profit_or_loss_effect_minor": 100,
             },
             {
                 "family": "deferred_tax",
+                "account_type": "deferred_tax_liability",
                 "profit_or_loss_effect_minor": 100,
             },
         ]
@@ -211,3 +226,136 @@ def test_missing_direct_cfo_is_not_formal_completion(rule_book):
     )
     assert direct_check["status"] == "not_run"
     assert result["difference_minor"] is None
+
+
+def test_voucher_balance_checks_each_voucher_without_offsetting():
+    journal = pd.DataFrame(
+        [
+            {
+                "voucher_id": "v1",
+                "account_code": "1001",
+                "debit_minor": 100,
+                "credit_minor": 0,
+            },
+            {
+                "voucher_id": "v2",
+                "account_code": "1001",
+                "debit_minor": 0,
+                "credit_minor": 100,
+            },
+        ]
+    )
+    trial_balance = pd.DataFrame(
+        [
+            {
+                "account_code": "1001",
+                "period_debit_minor": 100,
+                "period_credit_minor": 100,
+            }
+        ]
+    )
+
+    result = calculate_reconciliation_inputs(
+        journal,
+        trial_balance,
+        pd.DataFrame(columns=["item_no", "adjustment_amount_minor"]),
+        pd.DataFrame(),
+        pd.DataFrame(),
+    )
+
+    assert result["voucher_balance_difference_minor"] == 200
+
+
+def test_journal_trial_balance_checks_each_account_without_offsetting():
+    journal = pd.DataFrame(
+        [
+            {
+                "voucher_id": "v1",
+                "account_code": "1001",
+                "debit_minor": 100,
+                "credit_minor": 100,
+            },
+            {
+                "voucher_id": "v1",
+                "account_code": "1002",
+                "debit_minor": 100,
+                "credit_minor": 100,
+            },
+        ]
+    )
+    trial_balance = pd.DataFrame(
+        [
+            {
+                "account_code": "1001",
+                "period_debit_minor": 200,
+                "period_credit_minor": 0,
+            },
+            {
+                "account_code": "1002",
+                "period_debit_minor": 0,
+                "period_credit_minor": 200,
+            },
+        ]
+    )
+
+    result = calculate_reconciliation_inputs(
+        journal,
+        trial_balance,
+        pd.DataFrame(columns=["item_no", "adjustment_amount_minor"]),
+        pd.DataFrame(),
+        pd.DataFrame(),
+    )
+
+    assert result["journal_trial_balance_difference_minor"] == 400
+
+
+def test_deferred_tax_items_cannot_hide_each_others_difference():
+    journal = pd.DataFrame(
+        [
+            {
+                "voucher_id": "v1",
+                "account_code": "1001",
+                "debit_minor": 100,
+                "credit_minor": 100,
+            }
+        ]
+    )
+    trial_balance = pd.DataFrame(
+        [
+            {
+                "account_code": "1001",
+                "period_debit_minor": 100,
+                "period_credit_minor": 100,
+            }
+        ]
+    )
+    committed = pd.DataFrame(
+        [
+            {"item_no": 11, "adjustment_amount_minor": 200},
+            {"item_no": 12, "adjustment_amount_minor": 100},
+        ]
+    )
+    bridges = pd.DataFrame(
+        [
+            {
+                "family": "deferred_tax",
+                "account_type": "deferred_tax_asset",
+                "profit_or_loss_effect_minor": 100,
+            },
+            {
+                "family": "deferred_tax",
+                "account_type": "deferred_tax_liability",
+                "profit_or_loss_effect_minor": 200,
+            },
+        ]
+    )
+
+    result = calculate_reconciliation_inputs(
+        journal,
+        trial_balance,
+        committed,
+        pd.DataFrame(),
+        bridges,
+    )
+
+    assert result["deferred_tax_difference_minor"] == 200

@@ -33,13 +33,13 @@ from .input_adapter import (
     read_excel_sheet,
 )
 from .occupancy import resolve_claims
-from .output import export_results
+from .output import export_results, publish_audit_evidence
 from .reconciliation import (
     calculate_reconciliation_inputs,
     calculate_summary,
     reconcile_all,
 )
-from .storage import RunStore, sha256_file
+from .storage import RunStore, event_hash, sha256_file, validate_event_chain
 
 
 _STATE_FILE = "run_state.json"
@@ -70,21 +70,6 @@ def _read_jsonl(path: Path) -> list[dict]:
     ]
 
 
-def _event_hash(event: dict) -> str:
-    payload = {
-        key: value
-        for key, value in event.items()
-        if key != "event_hash"
-    }
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
 def _append_audit_events(run_store: RunStore, drafts: list[dict]) -> None:
     path = run_store.root / "07_audit" / "events.jsonl"
     existing = _read_jsonl(path)
@@ -99,7 +84,7 @@ def _append_audit_events(run_store: RunStore, drafts: list[dict]) -> None:
             "event_type": draft["event_type"],
             "payload": draft.get("payload", {}),
         }
-        event["event_hash"] = _event_hash(event)
+        event["event_hash"] = event_hash(event)
         previous_hash = event["event_hash"]
         events.append(event)
     run_store.append_events(events)
@@ -141,25 +126,52 @@ def _validated_source_confirmation(config: dict) -> dict:
 
 def _spec(config: dict) -> RunSpec:
     source_confirmation = _validated_source_confirmation(config)
+    entity_name = str(config.get("entity_name", "")).strip()
+    if not entity_name:
+        raise InputProtocolError("主体名称不能为空")
+    functional_currency = str(config.get("functional_currency", "")).strip()
+    if not functional_currency:
+        raise InputProtocolError("本位币不能为空")
+    currency_scale = config.get("currency_scale")
+    if (
+        isinstance(currency_scale, bool)
+        or not isinstance(currency_scale, int)
+        or not 0 <= currency_scale <= 6
+    ):
+        raise InputProtocolError("本位币小数位数必须是0至6的整数")
+    display_unit = str(config.get("display_unit", "")).strip()
+    if display_unit not in {"元", "千元", "万元"}:
+        raise InputProtocolError("展示单位必须是元、千元或万元")
+    net_profit_minor = config.get("net_profit_minor")
+    if isinstance(net_profit_minor, bool) or not isinstance(net_profit_minor, int):
+        raise InputProtocolError("净利润必须是最小货币单位整数")
+    materiality = config.get("performance_materiality_minor")
+    if (
+        isinstance(materiality, bool)
+        or not isinstance(materiality, int)
+        or materiality <= 0
+    ):
+        raise InputProtocolError("实际执行重要性水平必须是正整数")
+    financial_entity_flag = config.get("financial_entity_flag", False)
+    if not isinstance(financial_entity_flag, bool):
+        raise InputProtocolError("金融企业标志必须是JSON布尔值")
+    direct_cfo_minor = config.get("direct_cfo_minor")
+    if direct_cfo_minor is not None and (
+        isinstance(direct_cfo_minor, bool)
+        or not isinstance(direct_cfo_minor, int)
+    ):
+        raise InputProtocolError("直接法经营活动现金流量净额必须是整数")
     return RunSpec(
-        entity_name=str(config["entity_name"]),
+        entity_name=entity_name,
         period_start=str(config["period_start"]),
         period_end=str(config["period_end"]),
-        functional_currency=str(config["functional_currency"]),
-        currency_scale=int(config["currency_scale"]),
-        display_unit=str(config["display_unit"]),
-        net_profit_minor=int(config["net_profit_minor"]),
-        performance_materiality_minor=int(
-            config["performance_materiality_minor"]
-        ),
-        financial_entity_flag=bool(
-            config.get("financial_entity_flag", False)
-        ),
-        direct_cfo_minor=(
-            None
-            if config.get("direct_cfo_minor") is None
-            else int(config["direct_cfo_minor"])
-        ),
+        functional_currency=functional_currency,
+        currency_scale=currency_scale,
+        display_unit=display_unit,
+        net_profit_minor=net_profit_minor,
+        performance_materiality_minor=materiality,
+        financial_entity_flag=financial_entity_flag,
+        direct_cfo_minor=direct_cfo_minor,
         **source_confirmation,
     )
 
@@ -218,6 +230,12 @@ def _joined_text(row: pd.Series) -> str:
 def _asset_class(text: str) -> str:
     rules = (
         ("contract_asset", ("合同资产",)),
+        ("held_for_sale_asset", ("持有待售资产", "持有待售非流动资产")),
+        ("long_term_equity_investment", ("长期股权投资",)),
+        ("investment_property_cost", ("投资性房地产",)),
+        ("construction_in_progress", ("在建工程",)),
+        ("construction_materials", ("工程物资",)),
+        ("goodwill", ("商誉",)),
         ("receivable", ("应收", "坏账", "贷款", "债权")),
         ("right_of_use_asset", ("使用权资产",)),
         ("intangible_asset", ("无形资产", "累计摊销")),
@@ -231,6 +249,57 @@ def _asset_class(text: str) -> str:
         if any(term in text for term in terms):
             return asset_class
     return ""
+
+
+def _compile_issues(
+    decisions: pd.DataFrame,
+    family_issues: pd.DataFrame,
+    occupancy_issues: pd.DataFrame,
+    committed: pd.DataFrame,
+) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    if decisions is not None and not decisions.empty:
+        human = decisions.loc[
+            decisions.get(
+                "human_review_required",
+                pd.Series(False, index=decisions.index),
+            ).fillna(False).astype(bool)
+        ].copy()
+        if not human.empty:
+            human["item_no"] = human["recommended_item"].astype(int)
+            human["issue_code"] = "HUMAN_REVIEW_REQUIRED"
+            human["amount_minor"] = human["recommended_amount_minor"].astype(int)
+            human["final_decision"] = "review_required"
+            frames.append(human)
+    for frame in (family_issues, occupancy_issues):
+        if frame is not None and not frame.empty:
+            frames.append(frame.copy())
+    if not frames:
+        return pd.DataFrame()
+    issues = pd.concat(frames, ignore_index=True, sort=False)
+    if "item_no" not in issues:
+        issues["item_no"] = pd.NA
+    if "target_item_no" in issues:
+        missing_item = pd.to_numeric(issues["item_no"], errors="coerce").isna()
+        issues.loc[missing_item, "item_no"] = issues.loc[
+            missing_item, "target_item_no"
+        ]
+    if not committed.empty:
+        primary = committed.loc[
+            committed["physical_consumed_minor"].astype(int).gt(0)
+        ].drop_duplicates("fragment_id")
+        item_by_fragment = primary.set_index(
+            primary["fragment_id"].astype(str)
+        )["item_no"].to_dict()
+        source_ids = issues.get(
+            "source_fragment_id",
+            issues.get("fragment_id", pd.Series("", index=issues.index)),
+        ).fillna("").astype(str)
+        missing_item = pd.to_numeric(issues["item_no"], errors="coerce").isna()
+        issues.loc[missing_item, "item_no"] = source_ids.loc[missing_item].map(
+            item_by_fragment
+        )
+    return issues
 
 
 def _synthetic_fragment(
@@ -310,9 +379,14 @@ def _account_group_mask(
     frame: pd.DataFrame,
     account_names: tuple[str, ...],
 ) -> pd.Series:
+    names = set(account_names)
     paths = frame["account_path"].fillna("").astype(str)
-    roots = paths.str.split("/").str[0].str.split("_").str[0]
-    return roots.isin(account_names)
+    return paths.map(
+        lambda path: any(
+            segment.split("_", 1)[0] in names
+            for segment in path.split("/")
+        )
+    )
 
 
 def _family_results(
@@ -404,9 +478,16 @@ def _family_results(
         & ~text.str.contains("现金退款|现金收回", regex=True)
     )
     disposal_mask = affects_profit & text.str.contains(
-        "出售固定资产|处置固定资产|资产处置损益|毁损报废|报废净损失|固定资产盘亏",
+        "出售固定资产|处置固定资产|资产处置损益|毁损报废|报废净损失|"
+        "固定资产盘亏|处置无形资产|出售无形资产|处置投资性房地产|"
+        "出售投资性房地产|投资性房地产处置|使用权资产终止|在建工程处置",
         regex=True,
     )
+    investment_disposal_mask = affects_profit & text.str.contains(
+        "长期股权投资|金融资产|子公司",
+        regex=True,
+    ) & text.str.contains("处置|出售|转让|丧失控制", regex=True)
+    disposal_mask &= ~investment_disposal_mask
     noncash_input = fragments.loc[
         periodic_mask | long_prepaid_writeoff_mask | disposal_mask
     ].copy()
@@ -448,22 +529,32 @@ def _family_results(
         noncash_input["accounting_status"] = "normal"
         for _, row in noncash_input.loc[disposal_mask].iterrows():
             row_text = _joined_text(row)
-            is_scrap = any(
+            asset_class = str(row.get("asset_class", ""))
+            if not asset_class:
+                forced_ai_ids.add(str(row["fragment_id"]))
+                continue
+            is_fixed_scrap = asset_class == "fixed_asset" and any(
                 term in row_text for term in ("报废", "毁损", "盘亏")
             )
-            event_type = "fixed_asset_scrap" if is_scrap else "long_asset_sale"
+            event_type = (
+                "fixed_asset_scrap" if is_fixed_scrap else "long_asset_sale"
+            )
             row_index = noncash_input["fragment_id"].eq(row["fragment_id"])
             noncash_input.loc[
                 row_index,
                 "event_kind",
-            ] = "scrap_profit_or_loss" if is_scrap else "disposal_profit_or_loss"
+            ] = (
+                "scrap_profit_or_loss"
+                if is_fixed_scrap
+                else "disposal_profit_or_loss"
+            )
             event_id = f"{row['business_event_id']}-{event_type}"
             noncash_input.loc[row_index, "business_event_id"] = event_id
             noncash_events.append(
                 {
                     "business_event_id": event_id,
                     "event_type": event_type,
-                    "asset_class": "fixed_asset",
+                    "asset_class": asset_class,
                     "profit_or_loss_fragment_id": row["fragment_id"],
                     "profit_or_loss_minor": int(row["signed_minor"]),
                     "affects_profit_or_loss": True,
@@ -494,11 +585,14 @@ def _family_results(
         bridge_frames.append(
             noncash_routing.assign(family="noncash_assets")
         )
-        handled_ids.update(noncash_input["fragment_id"].astype(str))
+        handled_ids.update(
+            set(noncash_input["fragment_id"].astype(str)) - forced_ai_ids
+        )
 
     financial_mask = affects_profit & (
         account.str.contains("公允价值变动损益|财务费用|投资收益", regex=True)
         | text.str.contains("现金及现金等价物汇兑", regex=True)
+        | investment_disposal_mask
     )
     financial_input = fragments.loc[financial_mask].copy()
     if not financial_input.empty:
@@ -511,6 +605,14 @@ def _family_results(
                 return "cash_equivalent_fx"
             if "投资收益" in value:
                 return "other_investment_result"
+            if "长期股权投资" in value and any(
+                term in value for term in ("处置", "出售", "转让")
+            ):
+                return "long_term_equity_disposal"
+            if "子公司" in value and any(
+                term in value for term in ("处置", "出售", "丧失控制")
+            ):
+                return "subsidiary_disposal"
             if "手续费" in value or "结算费" in value:
                 return "bank_settlement_fee"
             if "经营性" in value and "汇兑" in value:
@@ -962,6 +1064,26 @@ def prepare_run(config_path: Path) -> dict:
         "trial_balance": Path(config["trial_balance_path"]),
         "rules": Path(config["rules_path"]),
     }
+    labels = {
+        "journal": "标准序时账",
+        "trial_balance": "科目余额表",
+        "rules": "规则文件",
+    }
+    missing_sources = [
+        labels[name] for name, path in source_paths.items() if not path.is_file()
+    ]
+    if missing_sources:
+        raise InputProtocolError("输入文件不存在：" + "、".join(missing_sources))
+    unsupported_workbooks = [
+        labels[name]
+        for name in ("journal", "trial_balance")
+        if source_paths[name].suffix.lower() not in {".xlsx", ".xlsm"}
+    ]
+    if unsupported_workbooks:
+        raise InputProtocolError(
+            "输入工作簿必须是xlsx或xlsm格式："
+            + "、".join(unsupported_workbooks)
+        )
     input_hashes = {
         name: sha256_file(path) for name, path in source_paths.items()
     }
@@ -1077,6 +1199,25 @@ def prepare_run(config_path: Path) -> dict:
     requests_path = store.root / "05_ai" / "ai_requests.jsonl"
     _write_jsonl(requests_path, requests)
     store._written_files["ai_requests"] = requests_path.relative_to(store.root)
+    checkpoint_names = (
+        "journal_lines",
+        "trial_balance",
+        "account_nodes",
+        "auxiliary_dimensions",
+        "amount_fragments",
+        "candidate_scope",
+        "rule_claims",
+        "ai_candidates",
+        "evidence",
+        "family_bridges",
+        "family_issues",
+        "ai_requests",
+    )
+    checkpoint_hashes = {
+        name: sha256_file(store.root / store._written_files[name])
+        for name in checkpoint_names
+    }
+    store.complete_stage("prepared", input_hashes, checkpoint_hashes)
 
     elapsed = time.perf_counter() - started
     _, peak = tracemalloc.get_traced_memory()
@@ -1228,6 +1369,39 @@ def get_run_status(run_dir: Path) -> dict:
                 "冻结输入快照缺失或已变化：" + "、".join(snapshot_changed)
             ),
         }
+    rules_snapshot = Path(state["rules_path"])
+    if (
+        not rules_snapshot.exists()
+        or sha256_file(rules_snapshot) != state["input_hashes"]["rules"]
+    ):
+        return {
+            **state,
+            "status": "invalidated",
+            "invalidated_inputs": ["rules_snapshot"],
+            "invalidation_reason": "冻结规则快照缺失或已变化",
+        }
+    store = _run_store_from_state(run_dir, state)
+    if not store.can_resume(
+        "prepared",
+        state["input_hashes"],
+        state["rule_version"],
+        state["code_version"],
+    ):
+        return {
+            **state,
+            "status": "invalidated",
+            "invalidated_inputs": ["checkpoint"],
+            "invalidation_reason": "准备阶段中间文件缺失、已变化或检查点不一致",
+        }
+    try:
+        validate_event_chain(run_dir / "07_audit" / "events.jsonl")
+    except ValueError as exc:
+        return {
+            **state,
+            "status": "invalidated",
+            "invalidated_inputs": ["audit_events"],
+            "invalidation_reason": str(exc),
+        }
     return state
 
 
@@ -1263,10 +1437,11 @@ def finalize_run(
     rule_claims = pd.read_parquet(
         run_dir / "04_candidates" / "rule_claims.parquet"
     )
+    validated_decisions_path = run_dir / "05_ai" / "ai_decisions_validated.jsonl"
+    if requests:
+        _write_jsonl(validated_decisions_path, decisions.to_dict("records"))
     ai_claims = []
     for _, decision in decisions.iterrows():
-        if decision["recommended_status"] != "included":
-            continue
         ai_claims.append(
             {
                 "fragment_id": decision["fragment_id"],
@@ -1275,9 +1450,13 @@ def finalize_run(
                 "claim_amount_minor": int(
                     decision["recommended_amount_minor"]
                 ),
-                "decision": "review_required"
-                if bool(decision["human_review_required"])
-                else "ai_classified",
+                "decision": (
+                    "excluded"
+                    if decision["recommended_status"] == "excluded"
+                    else "review_required"
+                    if bool(decision["human_review_required"])
+                    else "ai_classified"
+                ),
                 "rule_id": str(decision["applicable_rule_ids"][0]),
                 "reason": str(decision["reason"]),
                 "confidence": float(decision["confidence"]),
@@ -1330,11 +1509,6 @@ def finalize_run(
         how="left",
         suffixes=("", "_source"),
     )
-    summary = calculate_summary(
-        int(state["spec"]["net_profit_minor"]),
-        committed,
-        rules,
-    )
     journal = pd.read_parquet(
         run_dir / "02_normalized" / "journal_lines.parquet"
     )
@@ -1373,37 +1547,51 @@ def finalize_run(
         occupancy_issues,
         bridges,
     )
+    family_issues = pd.read_parquet(
+        run_dir / "04_candidates" / "family_issues.parquet"
+    )
+    issues = _compile_issues(
+        decisions,
+        family_issues,
+        occupancy_issues,
+        committed,
+    )
+    summary = calculate_summary(
+        int(state["spec"]["net_profit_minor"]),
+        committed,
+        rules,
+        issues,
+    )
     reconciliation = reconcile_all(
         summary,
         direct_cfo_minor=state["spec"]["direct_cfo_minor"],
         **reconciliation_inputs,
     )
-    issues = decisions.loc[
+    output_dir = run_dir / "08_output"
+    human_review_count = int(
         decisions.get(
             "human_review_required",
             pd.Series(False, index=decisions.index),
-        ).astype(bool)
-    ].copy()
-    family_issues = pd.read_parquet(
-        run_dir / "04_candidates" / "family_issues.parquet"
+        ).fillna(False).astype(bool).sum()
     )
-    if not family_issues.empty:
-        issues = pd.concat([issues, family_issues], ignore_index=True)
-    if not occupancy_issues.empty:
-        issues = pd.concat([issues, occupancy_issues], ignore_index=True)
-    output_dir = run_dir / "08_output"
     final_status = (
-        RunStatus.EXPORTED.value
+        RunStatus.PROVISIONAL_REVIEW.value
+        if human_review_count
+        else RunStatus.EXPORTED.value
         if reconciliation["status"] in {"pass", "not_run"}
         else RunStatus.BLOCKED.value
     )
     completion_status = (
         "formal_completed"
-        if reconciliation["status"] == "pass"
+        if reconciliation["status"] == "pass" and not human_review_count
         else "diagnostic_only"
     )
     completion_status_label = {
-        "pass": "正式核对完成",
+        "pass": (
+            "临时结果、待人工复核"
+            if human_review_count
+            else "正式核对完成"
+        ),
         "not_run": "仅诊断、待总对账",
     }.get(reconciliation["status"], "仅诊断、总对账未通过")
     file_status = RunStatus.EXPORTED.value
@@ -1450,10 +1638,17 @@ def finalize_run(
     state["unclassified_amount_minor"] = 0
     state["exclusive_conflict_count"] = exclusive_conflicts
     state["indirect_cfo_minor"] = reconciliation["indirect_cfo_minor"]
-    _write_state(store, state)
     _append_audit_events(
         store,
         [
+            {
+                "stage": "finalize",
+                "event_type": "ai_decisions_validated",
+                "payload": {
+                    "decision_count": len(decisions),
+                    "human_review_count": human_review_count,
+                },
+            },
             {
                 "stage": "finalize",
                 "event_type": "occupancy_committed",
@@ -1475,6 +1670,11 @@ def finalize_run(
             },
         ],
     )
+    publish_audit_evidence(
+        output_dir,
+        run_dir / "07_audit" / "events.jsonl",
+    )
+    _write_state(store, state)
     return {
         "run_dir": str(run_dir),
         "status": final_status,

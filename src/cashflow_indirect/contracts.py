@@ -17,16 +17,9 @@ class RunStatus(str, Enum):
     CALCULATED = "calculated"
     RECONCILED = "reconciled"
     EXPORTED = "exported"
+    PROVISIONAL_REVIEW = "provisional_review"
     BLOCKED = "blocked"
     FAILED = "failed"
-
-
-class DecisionStatus(str, Enum):
-    INCLUDED = "included"
-    EXCLUDED = "excluded"
-    PAIRED_OFFSET = "paired_offset"
-    AI_CLASSIFIED = "ai_classified"
-    REVIEW_REQUIRED = "review_required"
 
 
 @dataclass(frozen=True)
@@ -103,19 +96,52 @@ def load_rule_book(path: Path) -> RuleBook:
     if unknown_sources:
         raise ValueError(f"规则引用了未知财政部依据：{sorted(unknown_sources)}")
 
+    valid_items = set(range(1, 17))
+    exclusive_groups = tuple(
+        tuple(map(int, group)) for group in raw["exclusive_groups"]
+    )
+    if any(
+        len(group) < 2
+        or len(set(group)) != len(group)
+        or not set(group) <= valid_items
+        for group in exclusive_groups
+    ):
+        raise ValueError("互斥项目组必须包含至少两个不同的第1至16项")
+    paired_offsets = tuple(
+        tuple(map(int, pair)) for pair in raw["paired_offsets"]
+    )
+    if any(
+        len(pair) != 2
+        or pair[0] == pair[1]
+        or not set(pair) <= valid_items
+        for pair in paired_offsets
+    ):
+        raise ValueError("配套抵销必须由两个不同的第1至16项组成")
+    account_groups = {
+        str(name): tuple(map(str, values))
+        for name, values in raw["account_groups"].items()
+    }
+    required_groups = {
+        "资产减值准备",
+        "信用减值准备",
+        "递延所得税资产",
+        "递延所得税负债",
+        "存货",
+        "经营性应收",
+        "经营性应付",
+    }
+    if (
+        not required_groups <= set(account_groups)
+        or any(not name or not values for name, values in account_groups.items())
+    ):
+        raise ValueError("科目组必须包含全部必需分组且每组至少有一个科目")
+
     return RuleBook(
         schema_version=str(raw["schema_version"]),
         rule_version=str(raw["rule_version"]),
         items=items,
-        exclusive_groups=tuple(
-            tuple(map(int, group)) for group in raw["exclusive_groups"]
-        ),
-        paired_offsets=tuple(
-            tuple(map(int, pair)) for pair in raw["paired_offsets"]
-        ),
-        account_groups={
-            str(name): tuple(map(str, values))
-            for name, values in raw["account_groups"].items()
-        },
+        exclusive_groups=exclusive_groups,
+        paired_offsets=paired_offsets,
+        account_groups=account_groups,
         official_sources=official_sources,
     )

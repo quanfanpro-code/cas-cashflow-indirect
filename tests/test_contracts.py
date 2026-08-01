@@ -1,5 +1,12 @@
 ﻿from importlib import import_module
 
+import json
+from pathlib import Path
+
+import pytest
+
+from cashflow_indirect.contracts import load_rule_book
+
 
 def test_run_status_covers_the_complete_pipeline():
     contracts = import_module("cashflow_indirect.contracts")
@@ -16,6 +23,7 @@ def test_run_status_covers_the_complete_pipeline():
         "calculated",
         "reconciled",
         "exported",
+        "provisional_review",
         "blocked",
         "failed",
     ]
@@ -36,3 +44,31 @@ def test_rule_book_contains_all_sixteen_items_with_evidence(rule_book):
         for source_id in item.official_source_ids
     )
     assert rule_book.paired_offsets == ((3, 13), (4, 13), (5, 13))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("exclusive_groups", [[1, 17]], "互斥项目"),
+        ("paired_offsets", [[3, 13, 14]], "配套抵销"),
+        ("paired_offsets", [[3, 3]], "配套抵销"),
+        ("account_groups", {"存货": []}, "科目组"),
+    ],
+)
+def test_rule_book_rejects_invalid_cross_references(
+    tmp_path,
+    field,
+    value,
+    message,
+):
+    source = Path(__file__).resolve().parents[1] / "rules" / "cas_general_v1.json"
+    raw = json.loads(source.read_text(encoding="utf-8-sig"))
+    raw[field] = value
+    target = tmp_path / "bad-rules.json"
+    target.write_text(
+        json.dumps(raw, ensure_ascii=False),
+        encoding="utf-8-sig",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_rule_book(target)

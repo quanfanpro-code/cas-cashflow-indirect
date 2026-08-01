@@ -2,10 +2,12 @@
 
 import json
 from pathlib import Path
+import shutil
 
 import pandas as pd
+from xlsxwriter.exceptions import XlsxWriterException
 
-from .storage import sha256_file
+from .storage import sha256_file, validate_event_chain
 from .workpaper import (
     write_audit_workbook,
     write_item_markdowns,
@@ -70,6 +72,67 @@ def _manifest_entry(
         "record_count": record_count,
         "sha256": sha256_file(path),
     }
+
+
+def publish_audit_evidence(output_dir: Path, events_path: Path) -> dict:
+    """把最终事件链及查询索引加入正式输出清单。"""
+    output_dir = Path(output_dir)
+    events_path = Path(events_path)
+    validate_event_chain(events_path)
+    target_events = output_dir / "events.jsonl"
+    shutil.copy2(events_path, target_events)
+    event_rows = []
+    for line in target_events.read_text(encoding="utf-8-sig").splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        payload = event.get("payload", {})
+        event_rows.append(
+            {
+                "sequence_no": int(event["sequence_no"]),
+                "event_hash": str(event["event_hash"]),
+                "stage": str(event.get("stage", "")),
+                "event_type": str(event.get("event_type", "")),
+                "fragment_id": str(payload.get("fragment_id", "")),
+                "business_event_id": str(payload.get("business_event_id", "")),
+                "item_no": payload.get("item_no"),
+                "source_row": payload.get("source_row"),
+                "active": True,
+            }
+        )
+    event_index = pd.DataFrame(
+        event_rows,
+        columns=[
+            "sequence_no",
+            "event_hash",
+            "stage",
+            "event_type",
+            "fragment_id",
+            "business_event_id",
+            "item_no",
+            "source_row",
+            "active",
+        ],
+    )
+    index_path = output_dir / "event_index.parquet"
+    event_index.to_parquet(index_path, index=False)
+
+    manifest_path = output_dir / "output_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    retained = [
+        entry
+        for entry in manifest.get("files", [])
+        if entry.get("path") not in {"events.jsonl", "event_index.parquet"}
+    ]
+    retained.extend(
+        [
+            _manifest_entry(output_dir, target_events, len(event_rows)),
+            _manifest_entry(output_dir, index_path, len(event_index)),
+        ]
+    )
+    manifest["files"] = retained
+    _write_json(manifest_path, manifest)
+    return manifest
 
 
 def export_results(
@@ -197,7 +260,12 @@ def export_results(
                 journal_sheet=journal_sheet,
                 journal_header_row=journal_header_row,
             )
-    except (PermissionError, OutputExportError, ValueError) as exc:
+    except (
+        OSError,
+        XlsxWriterException,
+        OutputExportError,
+        ValueError,
+    ) as exc:
         _write_json(
             status_path,
             {

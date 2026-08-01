@@ -45,7 +45,7 @@ def _select_prepare() -> dict:
         journal = filedialog.askopenfilename(
             parent=root,
             title="选择经序时账分析器处理的标准序时账Excel",
-            filetypes=[("Excel文件", "*.xlsx *.xlsm *.xls")],
+            filetypes=[("Excel文件", "*.xlsx *.xlsm")],
         )
         if not journal:
             return _cancelled("journal_path")
@@ -53,7 +53,7 @@ def _select_prepare() -> dict:
             parent=root,
             title="选择科目余额表Excel",
             initialdir=str(Path(journal).parent),
-            filetypes=[("Excel文件", "*.xlsx *.xlsm *.xls")],
+            filetypes=[("Excel文件", "*.xlsx *.xlsm")],
         )
         if not balance:
             return _cancelled("trial_balance_path")

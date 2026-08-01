@@ -20,9 +20,9 @@ JSONL是不可变证据流，不是大表计算引擎。大规模结构化计算
 - `event_index.parquet`：按事件标识、金额片段、凭证和调节项目建立的查询索引；
 - `decision_trace.parquet`：判断轨迹，一行表示“一个金额片段对一个候选项目的一次最终判断”。
 
-`decision_trace.parquet`把规则理由、AI建议与正反证据、未采用方案、人工升级状态和最终金额占用合并为稳定判断轨迹，供18张表审计底稿逐行展示。稳定主键为`trace_id`，稳定关联字段为`fragment_id`、`business_event_id`、`item_no`和`source_row`。判断轨迹在金额占用完成后写入`06_decisions`目录并纳入检查点哈希；工作簿生成器只读取该轨迹，不在中央金额占用层重复保存会计判断说明。
+`decision_trace.parquet`把规则理由、AI建议与正反证据、未采用方案、人工升级状态和最终金额占用合并为稳定判断轨迹，供18张表审计底稿逐行展示。稳定主键为`trace_id`，稳定关联字段为`fragment_id`、`business_event_id`、`item_no`和`source_row`。判断轨迹在金额占用完成后写入`06_decisions`目录，并复制到正式输出目录纳入输出清单哈希；工作簿生成器只读取该轨迹，不在中央金额占用层重复保存会计判断说明。
 
-判断轨迹至少包含以下字段：`trace_id`、`fragment_id`、`business_event_id`、`source_row`、`item_no`、`candidate_status`、`final_decision`、`rule_id`、`decision_reason`、`confidence`、`recommendation`、`recommendation_reason`、`supporting_evidence`、`contrary_evidence`、`rejected_alternatives`、`human_review_required`、`claim_amount_minor`、`physical_consumed_minor`、`remaining_amount_minor`、`occupancy_type`、`paired_offset_id`。
+判断轨迹至少包含以下字段：`trace_id`、`fragment_id`、`business_event_id`、`source_row`、`item_no`、`candidate_status`、`final_decision`、`rule_id`、`decision_reason`、`confidence`、`recommendation`、`recommendation_reason`、`supporting_evidence`、`contrary_evidence`、`rejected_alternatives`、`human_review_required`、`claim_amount_minor`、`physical_consumed_minor`、`remaining_amount_minor`、`occupancy_type`、`paired_offset_id`、`recommended_status`、`recommended_amount_minor`、`cfo_impact_minor`、`model_id`、`prompt_template_version`、`prompt_hash`、`response_hash`。
 
 规则：
 
@@ -49,7 +49,7 @@ JSONL是不可变证据流，不是大表计算引擎。大规模结构化计算
 
 ## 四、事件类型
 
-当前实现实际写入`run_started`、`normalization_completed`、`ai_requests_frozen`、`occupancy_committed`、`reconciliation_completed`、`run_completed`六类；下列全集为协议预留，随实现扩展逐步启用。
+当前实现实际写入`run_started`、`normalization_completed`、`ai_requests_frozen`、`ai_decisions_validated`、`occupancy_committed`、`reconciliation_completed`、`run_completed`七类运行级事件；逐金额片段的规则、AI、证据、备选方案和占用结果统一保存在`decision_trace.parquet`，避免在事件流重复保存同一判断。下列全集为协议预留，随实现扩展逐步启用。
 
 ### 4.1 运行与检查点
 
@@ -237,7 +237,7 @@ JSONL是不可变证据流，不是大表计算引擎。大规模结构化计算
 2. 新判断通过`supersedes_event_id`引用原事件；
 3. 更正原因必须区分输入更正、规则变化、AI判断变化和人工复核；
 4. 更正导致金额变化时，重新生成受影响阶段的Parquet快照；
-5. `event_index.parquet`只把最新有效事件标记为`active=true`，旧事件仍可查询；
+5. `event_index.parquet`为当前运行级事件建立查询索引；存在更正事件时，旧事件仍保留并按更正关系标记有效状态；
 6. 输入文件或规则发生实质变化时，原则上新建运行批次，不在原批次中掩盖变化。
 
 ## 十、隐私和最小记录
@@ -268,7 +268,7 @@ JSONL是不可变证据流，不是大表计算引擎。大规模结构化计算
 2. `sequence_no`从1连续递增（由存储层在追加时强制校验）；
 3. `event_hash`与`previous_event_hash`逐条链式衔接；
 4. 每个金额片段都有最终处理事件；
-5. 每个占用都能追溯到规则、AI或人工判断事件；
+5. 每个占用都能通过`decision_trace.parquet`追溯到规则、AI或人工判断；
 6. 每个项目汇总都能追溯到金额占用明细；
 7. 每个更正事件引用的原事件存在；
 8. 所有阶段检查点的文件哈希与实际文件一致；

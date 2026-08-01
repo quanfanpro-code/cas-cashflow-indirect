@@ -96,6 +96,8 @@ _ITEM_6_ASSETS = {
     "productive_biological_asset",
     "oil_gas_asset",
     "other_nonfinancial_long_lived_asset",
+    "construction_materials",
+    "held_for_sale_asset",
 }
 
 _ITEM_7_EVENT_TYPES = {

@@ -88,12 +88,20 @@ def test_journal_rejects_two_sided_amount_on_one_row():
         adapter.normalize_journal_frame(raw, {}, sample_spec())
 
 
+def test_journal_rejects_voucher_date_outside_configured_period():
+    raw = sample_journal().iloc[[0]].copy()
+    raw["记账时间"] = "2025-12-31"
+
+    with pytest.raises(adapter.InputProtocolError, match="会计期间"):
+        adapter.normalize_journal_frame(raw, {}, sample_spec())
+
+
 def test_real_analyzer_export_derives_missing_journal_technical_fields():
     raw = pd.DataFrame(
         [
             {
                 "__source_row__": 27,
-                "会计月": "2025-01-02",
+                "会计月": "2026-01-02",
                 "凭证编号": 1,
                 "一级编号": 1221,
                 "一级科目": "其他应收款",
@@ -116,8 +124,8 @@ def test_real_analyzer_export_derives_missing_journal_technical_fields():
 
     result = adapter.normalize_journal_frame(raw, mapping, sample_spec())
 
-    assert result.loc[0, "voucher_date"] == "2025-01-02"
-    assert result.loc[0, "fiscal_period"] == "2025-01"
+    assert result.loc[0, "voucher_date"] == "2026-01-02"
+    assert result.loc[0, "fiscal_period"] == "2026-01"
     assert result.loc[0, "voucher_type"] == "记"
     assert result.loc[0, "original_line_id"] == "source-row-27"
     assert result.loc[0, "summary"] == "借备用金购买电脑"

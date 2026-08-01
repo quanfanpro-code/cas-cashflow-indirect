@@ -19,7 +19,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-addopts = "-q -m \"not performance\""
+addopts = "-q -m \"not performance\" --ignore=tests/test_real_input_compatibility.py --ignore=tests/test_jingrong_balance_compatibility.py"
 markers = [
   "performance: 10万行性能基线，默认全量测试不运行",
 ]

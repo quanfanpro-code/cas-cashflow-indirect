@@ -8,10 +8,68 @@ import pytest
 
 from cashflow_indirect.input_adapter import InputProtocolError
 from cashflow_indirect.pipeline import (
+    _account_group_mask,
+    _asset_class,
     finalize_run,
     get_run_status,
     prepare_run,
 )
+
+
+def test_account_group_matches_nested_balance_path():
+    frame = pd.DataFrame(
+        {"account_path": ["资产/流动资产/库存商品", "资产/固定资产"]}
+    )
+
+    assert _account_group_mask(frame, ("库存商品",)).tolist() == [True, False]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("商誉减值准备", "goodwill"),
+        ("长期股权投资减值准备", "long_term_equity_investment"),
+        ("投资性房地产减值准备", "investment_property_cost"),
+        ("在建工程减值准备", "construction_in_progress"),
+        ("工程物资减值准备", "construction_materials"),
+        ("持有待售资产减值准备", "held_for_sale_asset"),
+    ],
+)
+def test_asset_class_covers_rule_book_impairment_assets(text, expected):
+    assert _asset_class(text) == expected
+
+
+def test_intangible_asset_scrap_is_item_six_not_fixed_asset_item_seven(
+    minimal_config,
+):
+    config = json.loads(Path(minimal_config).read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal.cell(row=2, column=6, value="无形资产报废处置损失")
+    journal.cell(row=2, column=8, value="资产处置损益")
+    journal.cell(row=2, column=10, value="资产处置损益—无形资产报废")
+    journal.cell(row=2, column=13, value="无形资产")
+    journal.cell(row=3, column=6, value="无形资产报废处置损失")
+    journal.cell(row=3, column=7, value="1701")
+    journal.cell(row=3, column=8, value="无形资产")
+    journal.cell(row=3, column=9, value="170101")
+    journal.cell(row=3, column=10, value="无形资产")
+    journal.cell(row=3, column=13, value="资产处置损益")
+    balance = workbook[config["trial_balance_sheet"]]
+    balance.cell(row=2, column=2, value="611501")
+    balance.cell(row=2, column=3, value="资产处置损益—无形资产报废")
+    balance.cell(row=3, column=2, value="170101")
+    balance.cell(row=3, column=3, value="无形资产")
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+
+    assert 6 in set(claims["item_no"])
+    assert 7 not in set(claims["item_no"])
 
 
 def write_minimal_input(path: Path) -> None:
@@ -736,6 +794,82 @@ def test_rule_change_invalidates_prepared_checkpoint(minimal_config, tmp_path):
     assert status["invalidated_inputs"] == ["rules"]
 
 
+def test_intermediate_file_change_invalidates_prepared_checkpoint(minimal_config):
+    prepared = prepare_run(minimal_config)
+    run_dir = Path(prepared["run_dir"])
+    candidate_scope = run_dir / "04_candidates" / "candidate_scope.parquet"
+    candidate_scope.write_bytes(candidate_scope.read_bytes() + b"changed")
+
+    status = get_run_status(run_dir)
+
+    assert status["status"] == "invalidated"
+    assert "checkpoint" in status["invalidated_inputs"]
+
+
+def test_ai_exclusion_finishes_without_false_unclassified_amount(
+    minimal_config,
+    tmp_path,
+):
+    _update_config(minimal_config, direct_cfo_minor=-10000)
+    prepared = prepare_run(minimal_config)
+    ai_path = valid_ai_file(prepared, tmp_path)
+    decision = json.loads(ai_path.read_text(encoding="utf-8-sig"))
+    decision.update(
+        recommended_status="excluded",
+        recommended_amount_minor=0,
+        cfo_impact_minor=0,
+        recommendation="排除该金额片段",
+        reason="现有证据不足以证明属于非现金调节项目，按明确排除处理",
+    )
+    ai_path.write_text(
+        json.dumps(decision, ensure_ascii=False) + "\n",
+        encoding="utf-8-sig",
+    )
+
+    result = finalize_run(Path(prepared["run_dir"]), ai_path)
+
+    assert result["status"] == "exported"
+    assert result["completion_status"] == "formal_completed"
+    assert result["unclassified_amount_minor"] == 0
+    trace = pd.read_parquet(
+        Path(prepared["run_dir"]) / "06_decisions" / "decision_trace.parquet"
+    )
+    assert "excluded" in set(trace["final_decision"])
+
+
+def test_human_review_outputs_provisional_result_not_formal_completion(
+    minimal_config,
+    tmp_path,
+):
+    _update_config(minimal_config, performance_materiality_minor=10000)
+    prepared = prepare_run(minimal_config)
+    ai_path = valid_ai_file(prepared, tmp_path)
+    decision = json.loads(ai_path.read_text(encoding="utf-8-sig"))
+    decision.update(
+        strong_conflict=True,
+        human_review_required=True,
+        contrary_evidence=["报废审批单与资产处置合同对业务性质的描述冲突"],
+    )
+    ai_path.write_text(
+        json.dumps(decision, ensure_ascii=False) + "\n",
+        encoding="utf-8-sig",
+    )
+
+    result = finalize_run(Path(prepared["run_dir"]), ai_path)
+
+    assert result["status"] == "provisional_review"
+    assert result["file_status"] == "exported"
+    assert result["completion_status"] == "diagnostic_only"
+    summary = pd.read_parquet(
+        Path(prepared["run_dir"]) / "08_output" / "adjustment_summary.parquet"
+    )
+    item7 = summary.loc[summary["item_no"].eq(7)].iloc[0]
+    assert item7["issue_count"] == 1
+    assert item7["check_status"] == "review_required"
+    validated = Path(prepared["run_dir"]) / "05_ai" / "ai_decisions_validated.jsonl"
+    assert validated.is_file()
+
+
 def test_run_state_records_frozen_journal_for_workpaper(minimal_config):
     prepared = prepare_run(minimal_config)
     run_dir = Path(prepared["run_dir"])
@@ -803,6 +937,41 @@ def test_prepare_rejects_invalid_output_mode(minimal_config):
     _update_config(minimal_config, output_mode="turbo")
 
     with pytest.raises(InputProtocolError, match="输出模式"):
+        prepare_run(minimal_config)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("entity_name", "", "主体名称"),
+        ("functional_currency", "", "本位币"),
+        ("currency_scale", -1, "小数位数"),
+        ("display_unit", "亿元", "展示单位"),
+        ("performance_materiality_minor", -1, "重要性水平"),
+        ("financial_entity_flag", "false", "金融企业标志"),
+    ],
+)
+def test_prepare_rejects_invalid_run_spec(
+    minimal_config,
+    field,
+    value,
+    message,
+):
+    _update_config(minimal_config, **{field: value})
+
+    with pytest.raises(InputProtocolError, match=message):
+        prepare_run(minimal_config)
+
+
+def test_prepare_rejects_legacy_excel_format_before_reading(
+    minimal_config,
+    tmp_path,
+):
+    legacy = tmp_path / "旧版序时账.xls"
+    legacy.write_bytes(b"legacy")
+    _update_config(minimal_config, journal_path=str(legacy))
+
+    with pytest.raises(InputProtocolError, match="xlsx或xlsm"):
         prepare_run(minimal_config)
 
 

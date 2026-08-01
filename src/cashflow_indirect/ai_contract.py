@@ -232,6 +232,13 @@ def validate_ai_decisions(
             decision.get("cfo_impact_minor"), int
         ):
             raise AiDecisionError("AI结论必须给出经营活动现金流量影响")
+        cfo_impact = int(decision["cfo_impact_minor"])
+        if status == "excluded" and (amount != 0 or cfo_impact != 0):
+            raise AiDecisionError("排除结论的建议金额和经营活动现金流量影响必须为零")
+        if status == "included" and amount == 0:
+            raise AiDecisionError("纳入结论的建议金额不能为零")
+        if cfo_impact != amount:
+            raise AiDecisionError("AI建议金额与经营活动现金流量影响金额不一致")
 
         confidence = decision.get("confidence")
         if (

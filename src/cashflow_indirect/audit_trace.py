@@ -27,6 +27,13 @@ TRACE_COLUMNS = (
     "remaining_amount_minor",
     "occupancy_type",
     "paired_offset_id",
+    "recommended_status",
+    "recommended_amount_minor",
+    "cfo_impact_minor",
+    "model_id",
+    "prompt_template_version",
+    "prompt_hash",
+    "response_hash",
 )
 
 
@@ -158,6 +165,13 @@ def build_decision_trace(
                 "contrary_evidence": "未发现相反证据",
                 "rejected_alternatives": "",
                 "human_review_required": False,
+                "recommended_status": "",
+                "recommended_amount_minor": 0,
+                "cfo_impact_minor": 0,
+                "model_id": "",
+                "prompt_template_version": "",
+                "prompt_hash": "",
+                "response_hash": "",
             }
         )
 
@@ -196,21 +210,27 @@ def build_decision_trace(
         recommendation_reason = str(_row_value(decision, "reason", ""))
         confidence = float(_row_value(decision, "confidence", 0.0) or 0.0)
         human_review = bool(_row_value(decision, "human_review_required", False))
+        recommended_status = str(
+            _row_value(decision, "recommended_status", "included")
+        )
 
         for item_no in sorted(candidate_items):
             occupied = committed_by_key.get((fragment_id, item_no))
             if item_no == recommended:
-                occupied_decision = (
-                    str(occupied.get("decision", "ai_classified"))
-                    if occupied is not None
-                    else "ai_classified"
-                )
-                # 内部占用状态映射为业务最终结论：AI 已分类落数视为纳入
-                final_decision = (
-                    "included"
-                    if occupied_decision == "ai_classified"
-                    else occupied_decision
-                )
+                if recommended_status == "excluded":
+                    final_decision = "excluded"
+                else:
+                    occupied_decision = (
+                        str(occupied.get("decision", "ai_classified"))
+                        if occupied is not None
+                        else "ai_classified"
+                    )
+                    # 内部占用状态映射为业务最终结论：AI 已分类落数视为纳入
+                    final_decision = (
+                        "included"
+                        if occupied_decision == "ai_classified"
+                        else occupied_decision
+                    )
                 decision_reason = recommendation_reason
             else:
                 final_decision = "reclassified"
@@ -232,6 +252,21 @@ def build_decision_trace(
                     "contrary_evidence": contrary_evidence,
                     "rejected_alternatives": rejected_alternatives,
                     "human_review_required": human_review,
+                    "recommended_status": recommended_status,
+                    "recommended_amount_minor": int(
+                        _row_value(decision, "recommended_amount_minor", 0) or 0
+                    ),
+                    "cfo_impact_minor": int(
+                        _row_value(decision, "cfo_impact_minor", 0) or 0
+                    ),
+                    "model_id": str(_row_value(decision, "model_id", "")),
+                    "prompt_template_version": str(
+                        _row_value(decision, "prompt_template_version", "")
+                    ),
+                    "prompt_hash": str(_row_value(decision, "prompt_hash", "")),
+                    "response_hash": str(
+                        _row_value(decision, "response_hash", "")
+                    ),
                 }
             )
     return pd.DataFrame(rows, columns=list(TRACE_COLUMNS))

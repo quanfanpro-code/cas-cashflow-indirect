@@ -76,6 +76,7 @@ def resolve_claims(
             }
         )
     ].copy()
+    exclusions = claims.loc[claims["decision"].eq("excluded")].copy()
     known_fragments = set(fragments["fragment_id"].astype(str))
     items = {item.item_no for item in rule_book.items}
     exclusive_groups = [set(group) for group in rule_book.exclusive_groups]
@@ -85,6 +86,9 @@ def resolve_claims(
 
     unknown_claims = included.loc[
         ~included["fragment_id"].astype(str).isin(known_fragments)
+    ]
+    unknown_exclusions = exclusions.loc[
+        ~exclusions["fragment_id"].astype(str).isin(known_fragments)
     ]
     for fragment_id in sorted(set(unknown_claims["fragment_id"].astype(str))):
         issue_rows.append(
@@ -99,6 +103,19 @@ def resolve_claims(
     included = included.loc[
         included["fragment_id"].astype(str).isin(known_fragments)
     ]
+    for fragment_id in sorted(set(unknown_exclusions["fragment_id"].astype(str))):
+        issue_rows.append(
+            _issue(
+                fragment_id,
+                "UNKNOWN_FRAGMENT",
+                "排除结论引用了未知金额片段",
+                0,
+                "fix_claim",
+            )
+        )
+    exclusions = exclusions.loc[
+        exclusions["fragment_id"].astype(str).isin(known_fragments)
+    ]
 
     for _, fragment in fragments.sort_values("fragment_id").iterrows():
         fragment_id = str(fragment["fragment_id"])
@@ -107,12 +124,15 @@ def resolve_claims(
         fragment_claims = included.loc[
             included["fragment_id"].astype(str).eq(fragment_id)
         ].copy()
+        fragment_exclusions = exclusions.loc[
+            exclusions["fragment_id"].astype(str).eq(fragment_id)
+        ].copy()
         fragment_claims = fragment_claims.sort_values(
             ["item_no", "rule_id"],
             kind="stable",
         )
         if not processable or available == 0:
-            if not fragment_claims.empty:
+            if not fragment_claims.empty or not fragment_exclusions.empty:
                 issue_rows.append(
                     _issue(
                         fragment_id,
@@ -122,6 +142,25 @@ def resolve_claims(
                         "fix_claim",
                     )
                 )
+            continue
+        if not fragment_exclusions.empty:
+            valid_exclusion = (
+                len(fragment_exclusions) == 1
+                and fragment_claims.empty
+                and int(fragment_exclusions.iloc[0]["item_no"]) in items
+                and int(fragment_exclusions.iloc[0]["claim_amount_minor"]) == 0
+            )
+            if valid_exclusion:
+                continue
+            issue_rows.append(
+                _issue(
+                    fragment_id,
+                    "INVALID_EXCLUSION",
+                    "同一金额片段的排除结论必须唯一、金额为零且不能同时申请占用",
+                    available,
+                    "fix_claim",
+                )
+            )
             continue
         if fragment_claims.empty:
             issue_rows.append(

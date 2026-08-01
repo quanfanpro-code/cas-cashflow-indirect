@@ -117,6 +117,35 @@ def test_ai_decision_rejects_boolean_cfo_impact(ai_request):
         ai_contract.validate_ai_decisions([ai_request], [bad])
 
 
+def test_ai_decision_requires_amount_and_cfo_impact_to_agree(ai_request):
+    bad = valid_decision(ai_request)
+    bad["cfo_impact_minor"] = 1
+
+    with pytest.raises(ai_contract.AiDecisionError, match="金额不一致"):
+        ai_contract.validate_ai_decisions([ai_request], [bad])
+
+
+def test_ai_exclusion_must_use_zero_amount_and_zero_cfo_impact(ai_request):
+    excluded = valid_decision(ai_request)
+    excluded.update(
+        recommended_status="excluded",
+        recommended_amount_minor=0,
+        cfo_impact_minor=0,
+        recommendation="排除该金额片段",
+        reason="现有证据表明该事项已经包含在净利润和经营现金流中",
+    )
+
+    result = ai_contract.validate_ai_decisions([ai_request], [excluded])
+
+    assert result.loc[0, "recommended_status"] == "excluded"
+    assert result.loc[0, "recommended_amount_minor"] == 0
+
+    excluded["recommended_amount_minor"] = 1
+    excluded["cfo_impact_minor"] = 1
+    with pytest.raises(ai_contract.AiDecisionError, match="排除结论"):
+        ai_contract.validate_ai_decisions([ai_request], [excluded])
+
+
 def test_ai_contract_rejects_duplicate_request_and_decision(ai_request):
     with pytest.raises(ai_contract.AiDecisionError, match="重复请求"):
         ai_contract.validate_ai_decisions(

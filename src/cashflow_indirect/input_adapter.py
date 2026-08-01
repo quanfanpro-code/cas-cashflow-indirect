@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+from zipfile import BadZipFile
 
 import pandas as pd
 
@@ -219,12 +220,21 @@ def normalize_journal_frame(
             dtype="int64",
         )
     try:
-        result["voucher_date"] = pd.to_datetime(
+        voucher_dates = pd.to_datetime(
             frame["voucher_date"],
             errors="raise",
-        ).dt.strftime("%Y-%m-%d")
+        )
+        period_start = pd.Timestamp(spec.period_start)
+        period_end = pd.Timestamp(spec.period_end)
     except (TypeError, ValueError) as exc:
         raise InputProtocolError("序时账存在无法识别的凭证日期") from exc
+    if period_start > period_end:
+        raise InputProtocolError("会计期间开始日期不得晚于结束日期")
+    outside_period = ~voucher_dates.between(period_start, period_end)
+    if outside_period.any():
+        rows = result.loc[outside_period, "source_row"].tolist()
+        raise InputProtocolError(f"序时账凭证日期超出会计期间：{rows}")
+    result["voucher_date"] = voucher_dates.dt.strftime("%Y-%m-%d")
 
     for field in (
         "fiscal_period",
@@ -760,7 +770,7 @@ def read_excel_sheet(
             dtype=object,
             engine="openpyxl",
         )
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, BadZipFile) as exc:
         raise InputProtocolError(f"Excel工作表无法读取：{path}::{sheet_name}") from exc
     frame["__source_row__"] = range(header_row + 1, header_row + 1 + len(frame))
     frame.attrs.update(

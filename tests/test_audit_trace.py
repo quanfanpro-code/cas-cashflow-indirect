@@ -295,6 +295,38 @@ def test_ai_trace_keeps_selected_and_reclassified_candidate_evidence(
     assert "候选后改归第6项" in row10["decision_reason"]
     assert row10["recommendation_reason"] == "资产类别和损益科目均指向长期资产处置"
     assert "没有投资协议" in row10["rejected_alternatives"]
+    assert row6["model_id"] == "accounting-model"
+    assert row6["prompt_hash"] == "a" * 64
+    assert row6["response_hash"] == "b" * 64
+    assert row6["cfo_impact_minor"] == 250000
+
+
+def test_ai_exclusion_is_recorded_as_excluded_without_occupancy(
+    ai_candidate_rows,
+    ai_request_rows,
+    ai_decision_rows,
+    ai_source_fragment,
+    ai_evidence_rows,
+    empty_bridges,
+):
+    decisions = ai_decision_rows.copy()
+    decisions.loc[0, "recommended_status"] = "excluded"
+    decisions.loc[0, "recommended_amount_minor"] = 0
+    decisions.loc[0, "cfo_impact_minor"] = 0
+
+    trace = audit_trace.build_decision_trace(
+        rule_claims=pd.DataFrame(),
+        ai_candidates=ai_candidate_rows,
+        ai_requests=ai_request_rows,
+        ai_decisions=decisions,
+        committed=pd.DataFrame(),
+        fragments=ai_source_fragment,
+        evidence=ai_evidence_rows,
+        family_bridges=empty_bridges,
+    )
+
+    assert trace.loc[trace["item_no"].eq(6), "final_decision"].item() == "excluded"
+    audit_trace.validate_decision_trace(trace)
 
 
 
@@ -321,6 +353,13 @@ def _trace_row(**overrides):
         "remaining_amount_minor": 0,
         "occupancy_type": "exclusive",
         "paired_offset_id": None,
+        "recommended_status": "",
+        "recommended_amount_minor": 0,
+        "cfo_impact_minor": 0,
+        "model_id": "",
+        "prompt_template_version": "",
+        "prompt_hash": "",
+        "response_hash": "",
     }
     row.update(overrides)
     return row

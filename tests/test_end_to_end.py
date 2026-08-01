@@ -573,6 +573,14 @@ def test_complete_chinese_workbook_reconciles_all_sixteen_items(tmp_path):
     assert _verify_manifest_hashes(
         run_dir / "08_output" / "output_manifest.json"
     )
+    manifest = json.loads(
+        (run_dir / "08_output" / "output_manifest.json").read_text(
+            encoding="utf-8-sig"
+        )
+    )
+    manifest_paths = {entry["path"] for entry in manifest["files"]}
+    assert {"events.jsonl", "event_index.parquet"} <= manifest_paths
+    assert len(pd.read_parquet(run_dir / "08_output" / "event_index.parquet")) > 0
     workbook = openpyxl.load_workbook(
         result["workbook_path"],
         read_only=False,

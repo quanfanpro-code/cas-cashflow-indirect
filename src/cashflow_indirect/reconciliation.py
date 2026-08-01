@@ -22,6 +22,7 @@ def calculate_summary(
     net_profit_minor: int,
     occupancy: pd.DataFrame,
     rule_book: RuleBook,
+    issues: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """只汇总已经提交的正式占用，不在汇总层重跑项目规则。"""
     if not occupancy.empty:
@@ -80,6 +81,21 @@ def calculate_summary(
             if not matched.empty
             else pd.Series(dtype=bool)
         )
+        item_issues = pd.DataFrame()
+        if issues is not None and not issues.empty and "item_no" in issues:
+            issue_items = pd.to_numeric(issues["item_no"], errors="coerce")
+            item_issues = issues.loc[issue_items.eq(item.item_no)]
+        review_required = (
+            item_issues.get(
+                "human_review_required",
+                pd.Series(False, index=item_issues.index),
+            )
+            .fillna(False)
+            .astype(bool)
+            .any()
+            if not item_issues.empty
+            else False
+        )
         rows.append(
             {
                 "item_no": item.item_no,
@@ -101,8 +117,14 @@ def calculate_summary(
                 )
                 if not matched.empty
                 else 0,
-                "issue_count": 0,
-                "check_status": "pass",
+                "issue_count": int(len(item_issues)),
+                "check_status": (
+                    "review_required"
+                    if review_required
+                    else "warning"
+                    if not item_issues.empty
+                    else "pass"
+                ),
             }
         )
     return pd.DataFrame(rows, columns=_SUMMARY_COLUMNS)
@@ -115,12 +137,15 @@ def calculate_reconciliation_inputs(
     occupancy_issues: pd.DataFrame,
     bridges: pd.DataFrame,
 ) -> dict[str, int]:
-    """从冻结的标准数据和桥接证据计算六类项目内核对输入。"""
+    """从冻结的标准数据和桥接证据计算项目内核对输入。"""
     required_frames = {
-        "序时账": (journal, {"debit_minor", "credit_minor"}),
+        "序时账": (
+            journal,
+            {"voucher_id", "account_code", "debit_minor", "credit_minor"},
+        ),
         "余额表": (
             trial_balance,
-            {"period_debit_minor", "period_credit_minor"},
+            {"account_code", "period_debit_minor", "period_credit_minor"},
         ),
         "金额占用": (occupancy, {"item_no", "adjustment_amount_minor"}),
     }
@@ -129,18 +154,33 @@ def calculate_reconciliation_inputs(
         if missing:
             raise ValueError(f"{name}缺少核对字段：{missing}")
 
+    voucher_totals = journal.groupby("voucher_id", dropna=False)[
+        ["debit_minor", "credit_minor"]
+    ].sum()
     voucher_difference = int(
-        journal["debit_minor"].sum() - journal["credit_minor"].sum()
+        (voucher_totals["debit_minor"] - voucher_totals["credit_minor"])
+        .abs()
+        .sum()
     )
+    journal_by_account = journal.groupby("account_code", dropna=False)[
+        ["debit_minor", "credit_minor"]
+    ].sum()
+    balance_by_account = trial_balance.groupby("account_code", dropna=False)[
+        ["period_debit_minor", "period_credit_minor"]
+    ].sum()
+    account_comparison = journal_by_account.join(
+        balance_by_account,
+        how="outer",
+    ).fillna(0)
     journal_trial_balance_difference = int(
-        abs(
-            int(journal["debit_minor"].sum())
-            - int(trial_balance["period_debit_minor"].sum())
-        )
-        + abs(
-            int(journal["credit_minor"].sum())
-            - int(trial_balance["period_credit_minor"].sum())
-        )
+        (
+            account_comparison["debit_minor"]
+            - account_comparison["period_debit_minor"]
+        ).abs().sum()
+        + (
+            account_comparison["credit_minor"]
+            - account_comparison["period_credit_minor"]
+        ).abs().sum()
     )
 
     occupied = (
@@ -226,29 +266,37 @@ def calculate_reconciliation_inputs(
         abs(int(occupied.get(item_no, 0)) - expected[item_no])
         for item_no in (13, 14, 15)
     )
-    deferred_tax_actual = int(
-        occupancy.loc[
-            occupancy["item_no"].astype(int).isin({11, 12}),
-            "adjustment_amount_minor",
-        ].sum()
+    deferred_tax_actual = (
+        occupancy.loc[occupancy["item_no"].astype(int).isin({11, 12})]
+        .groupby("item_no")["adjustment_amount_minor"]
+        .sum()
+        .astype("int64")
+        .to_dict()
     )
-    deferred_tax_expected = 0
+    deferred_tax_expected = {11: 0, 12: 0}
     if not bridges.empty and "profit_or_loss_effect_minor" in bridges:
         family = bridges.get(
             "family",
             pd.Series("", index=bridges.index),
         ).fillna("")
-        deferred_tax_expected = int(
-            pd.to_numeric(
-                bridges.loc[
-                    family.eq("deferred_tax"),
-                    "profit_or_loss_effect_minor",
-                ],
-                errors="coerce",
+        deferred = bridges.loc[family.eq("deferred_tax")].copy()
+        if not deferred.empty:
+            if "account_type" not in deferred:
+                raise ValueError("递延所得税桥接缺少科目类型")
+            deferred["_item_no"] = deferred["account_type"].map(
+                {
+                    "deferred_tax_asset": 11,
+                    "deferred_tax_liability": 12,
+                }
             )
-            .fillna(0)
-            .sum()
-        )
+            if deferred["_item_no"].isna().any():
+                raise ValueError("递延所得税桥接包含不支持的科目类型")
+            deferred["_amount"] = pd.to_numeric(
+                deferred["profit_or_loss_effect_minor"],
+                errors="coerce",
+            ).fillna(0)
+            for item_no, amount in deferred.groupby("_item_no")["_amount"].sum().items():
+                deferred_tax_expected[int(item_no)] = int(amount)
     exclusive_conflicts = int(
         occupancy_issues.get(
             "issue_code",
@@ -266,7 +314,13 @@ def calculate_reconciliation_inputs(
         "exclusive_conflict_count": exclusive_conflicts,
         "balance_bridge_difference_minor": balance_bridge_difference,
         "deferred_tax_difference_minor": (
-            deferred_tax_actual - deferred_tax_expected
+            sum(
+                abs(
+                    int(deferred_tax_actual.get(item_no, 0))
+                    - deferred_tax_expected[item_no]
+                )
+                for item_no in (11, 12)
+            )
         ),
     }
 

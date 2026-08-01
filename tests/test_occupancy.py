@@ -200,3 +200,27 @@ def test_review_required_claim_still_occupies_and_keeps_escalation(rule_book):
     assert committed["physical_consumed_minor"].sum() == 20000
     assert committed["decision"].tolist() == ["review_required"]
     assert issues.empty
+
+
+def test_valid_exclusion_resolves_fragment_without_occupying_amount(rule_book):
+    claims = pd.DataFrame(
+        [
+            {
+                "fragment_id": "f1",
+                "item_no": 6,
+                "claim_amount_minor": 0,
+                "decision": "excluded",
+                "rule_id": "AI-CANDIDATE-6",
+                "paired_offset_id": None,
+            }
+        ]
+    )
+
+    committed, issues = occupancy_module.resolve_claims(
+        make_fragment(),
+        claims,
+        rule_book,
+    )
+
+    assert committed.empty
+    assert issues.empty
