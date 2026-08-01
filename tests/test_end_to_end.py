@@ -3,14 +3,12 @@ import json
 from pathlib import Path
 import random
 import time
-from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 import openpyxl
 from openpyxl import Workbook
 
-from cashflow_indirect.output import _write_workbook
 from cashflow_indirect.pipeline import (
     finalize_run,
     get_run_status,
@@ -78,7 +76,7 @@ def _line(
     }
 
 
-def _build_accounting_input(path: Path, audit_root: Path) -> None:
+def _build_accounting_input(path: Path) -> None:
     journal = []
     accounts = {}
     voucher_no = 0
@@ -382,16 +380,15 @@ def _build_accounting_input(path: Path, audit_root: Path) -> None:
             ],
         ]
     )
-    _write_workbook(
-        {
-            "sheets": [
-                {"name": "序时账", "rows": [JOURNAL_HEADER, *journal]},
-                {"name": "余额表", "rows": [BALANCE_HEADER, *balance_rows]},
-            ]
-        },
-        path,
-        SimpleNamespace(root=audit_root),
-    )
+    workbook = Workbook()
+    journal_sheet = workbook.active
+    journal_sheet.title = "序时账"
+    for row in [JOURNAL_HEADER, *journal]:
+        journal_sheet.append(row)
+    balance_sheet = workbook.create_sheet("余额表")
+    for row in [BALANCE_HEADER, *balance_rows]:
+        balance_sheet.append(row)
+    workbook.save(path)
 
 
 def _write_config(tmp_path: Path, input_path: Path) -> Path:
@@ -449,7 +446,7 @@ def _write_ai_decision(request: dict, path: Path) -> None:
         "confidence": 0.82,
         "strong_conflict": False,
         "human_review_required": False,
-        "model_id": "chen-yiwei-accounting",
+        "model_id": "cashflow-indirect-ai",
         "prompt_template_version": "cashflow-ai-v1",
         "prompt_hash": "a" * 64,
         "response_hash": "b" * 64,
@@ -507,7 +504,7 @@ def _frozen_hashes(run_dir: Path) -> dict[str, str]:
 
 def test_complete_chinese_workbook_reconciles_all_sixteen_items(tmp_path):
     input_path = tmp_path / "端到端输入.xlsx"
-    _build_accounting_input(input_path, tmp_path / "input_build")
+    _build_accounting_input(input_path)
     prepared = prepare_run(_write_config(tmp_path, input_path))
     requests = [
         json.loads(line)
@@ -603,7 +600,7 @@ def test_complete_chinese_workbook_reconciles_all_sixteen_items(tmp_path):
 
 def test_restart_reuses_checkpoint_and_source_change_invalidates_it(tmp_path):
     input_path = tmp_path / "检查点输入.xlsx"
-    _build_accounting_input(input_path, tmp_path / "input_build")
+    _build_accounting_input(input_path)
     prepared = prepare_run(_write_config(tmp_path, input_path))
     run_dir = Path(prepared["run_dir"])
     before = _frozen_hashes(run_dir)
@@ -747,7 +744,7 @@ def test_decision_trace_and_item_sheets_keep_reason_and_evidence(tmp_path):
     import openpyxl
 
     input_path = tmp_path / "证据端到端输入.xlsx"
-    _build_accounting_input(input_path, tmp_path / "input_build")
+    _build_accounting_input(input_path)
     prepared = prepare_run(_write_config(tmp_path, input_path))
     requests = [
         json.loads(line)

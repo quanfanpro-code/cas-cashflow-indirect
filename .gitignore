@@ -25,5 +25,3 @@ docs/
 # 依赖本机真实文件或内部路径的验收测试
 tests/test_real_input_compatibility.py
 tests/test_jingrong_balance_compatibility.py
-tests/test_self_contained_skill.py
-tests/test_skill_guidance.py

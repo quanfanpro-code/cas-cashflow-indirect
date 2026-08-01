@@ -126,7 +126,10 @@ def test_skill_instructions_are_runnable_from_any_working_directory():
 
     assert r"<技能根目录>\scripts\engine_launcher.py" in content
     assert r"<技能根目录>\scripts\select_paths.py" in content
-    assert "chen-yiwei-perspective" in content
+    assert "REQUIRED SUB-SKILL" not in content
+    assert "chen-yiwei-perspective" not in content
+    assert r"references\知识库\知识库_现金流量表相关内容汇编.md" in content
+    assert r"references\准则原文" in content
     assert "财政部" in content
     assert "达到实际执行重要性且存在强冲突" in content
 

@@ -1,14 +1,12 @@
 import json
 from pathlib import Path
 import shutil
-from types import SimpleNamespace
 
 import openpyxl
 import pandas as pd
 import pytest
 
 from cashflow_indirect.input_adapter import InputProtocolError
-from cashflow_indirect.output import _write_workbook
 from cashflow_indirect.pipeline import (
     finalize_run,
     get_run_status,
@@ -16,7 +14,7 @@ from cashflow_indirect.pipeline import (
 )
 
 
-def write_minimal_input(path: Path, audit_root: Path) -> None:
+def write_minimal_input(path: Path) -> None:
     journal_rows = [
         [
             "记账时间",
@@ -85,23 +83,21 @@ def write_minimal_input(path: Path, audit_root: Path) -> None:
         ["科目", "671101", "固定资产损失", 1, "", "损益", 0, 0, 100, 0, 0, 0],
         ["科目", "160601", "固定资产清理", 1, "", "资产", 0, 0, 0, 100, 0, 100],
     ]
-    run_store = SimpleNamespace(root=audit_root)
-    _write_workbook(
-        {
-            "sheets": [
-                {"name": "序时账", "rows": journal_rows},
-                {"name": "余额表", "rows": balance_rows},
-            ]
-        },
-        path,
-        run_store,
-    )
+    workbook = openpyxl.Workbook()
+    journal_sheet = workbook.active
+    journal_sheet.title = "序时账"
+    for row in journal_rows:
+        journal_sheet.append(row)
+    balance_sheet = workbook.create_sheet("余额表")
+    for row in balance_rows:
+        balance_sheet.append(row)
+    workbook.save(path)
 
 
 @pytest.fixture
 def minimal_config(tmp_path):
     input_path = tmp_path / "最小输入.xlsx"
-    write_minimal_input(input_path, tmp_path / "input_build")
+    write_minimal_input(input_path)
     config_path = tmp_path / "运行配置.json"
     config = {
         "journal_path": str(input_path),
@@ -283,7 +279,7 @@ def valid_ai_file(run_result, tmp_path):
         "confidence": 0.88,
         "strong_conflict": False,
         "human_review_required": False,
-        "model_id": "chen-yiwei-accounting",
+        "model_id": "cashflow-indirect-ai",
         "prompt_template_version": "cashflow-ai-v1",
         "prompt_hash": "a" * 64,
         "response_hash": "b" * 64,
@@ -934,7 +930,7 @@ def test_blocked_run_still_writes_diagnostic_files(minimal_config, tmp_path):
         "confidence": 0.88,
         "strong_conflict": False,
         "human_review_required": False,
-        "model_id": "chen-yiwei-accounting",
+        "model_id": "cashflow-indirect-ai",
         "prompt_template_version": "cashflow-ai-v1",
         "prompt_hash": "a" * 64,
         "response_hash": "b" * 64,
