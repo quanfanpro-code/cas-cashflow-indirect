@@ -1,4 +1,4 @@
-﻿"""金额片段、结转标记和业务事件。"""
+"""金额片段、结转标记和业务事件。"""
 
 import hashlib
 import re
@@ -70,7 +70,7 @@ def mark_technical_closing_lines(
         )
     )
     signed = result["signed_minor"].astype("int64")
-    income = codes.str.startswith(("600", "601", "605", "610", "611", "630"))
+    income = codes.str.startswith(("600", "601", "605", "606", "610", "611", "630"))
     expense = codes.str.startswith(("640", "660", "670", "671", "680"))
     direction_matches = (income & signed.gt(0)) | (expense & signed.lt(0))
     explicit_closing_rule = (

@@ -52,6 +52,7 @@ description: Use when the user needs to prepare, resume, inspect, or explain a C
    - `net_profit_user_confirmed`：客户明确提供或确认净利润后写`true`
    - `net_profit_source`：客户直接提供写`user_provided`；客户确认报表金额写`user_confirmed_statement`
    - `net_profit_source_note`：记录客户提供方式或所确认的报表来源，不得留空
+   - `financial_entity_flag`：JSON布尔值。主体为银行、证券、保险、金融租赁、小额贷款等金融企业时，必须先询问客户确认并写`true`；其他主体写`false`。为`true`时，核心利息、手续费及佣金业务不会套用一般企业规则，会阻断并转AI判断。
 8. 运行：
 
 ```powershell
@@ -99,7 +100,7 @@ python -X utf8 "<技能根目录>\scripts\engine_launcher.py" finalize --run-dir
 python -X utf8 "<技能根目录>\scripts\engine_launcher.py" status --run-dir <运行目录>
 ```
 
-状态为`awaiting_ai`时继续“处理AI请求”。状态为`provisional_review`时，说明全部金额已经按AI首选方案落数并生成底稿，但仍有达到门槛的强冲突事项；必须向用户展示AI建议、理由、正反证据和金额影响，不得称为正式完成。状态为`invalidated`且`invalidated_inputs`包含`input_source_confirmation`时，说明旧运行缺少输入来源确认，必须重新向客户取得净利润及其来源并新建运行；不得继续旧检查点。其他`invalidated`状态重新选择已经变化的账簿或规则并新建运行，不复用旧结论。状态为`blocked`时读取`08_output\reconciliation.json`和异常表，说明真实差异及一个明确修复动作。
+状态为`awaiting_ai`时继续“处理AI请求”。状态为`provisional_review`时，说明全部金额已经按AI首选方案落数并生成底稿，但仍有达到门槛的强冲突事项；必须向用户展示AI建议、理由、正反证据和金额影响，不得称为正式完成。状态为`invalidated`且`invalidated_inputs`包含`input_source_confirmation`时，说明旧运行缺少输入来源确认，必须重新向客户取得净利润及其来源并新建运行；不得继续旧检查点。其他`invalidated`状态重新选择已经变化的账簿或规则并新建运行，不复用旧结论。状态为`blocked`时读取`08_output\reconciliation.json`和`issues.jsonl`，说明真实差异及一个明确修复动作。
 
 ## 正式交付门槛
 

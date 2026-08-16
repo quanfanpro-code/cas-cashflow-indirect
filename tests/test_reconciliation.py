@@ -359,3 +359,62 @@ def test_deferred_tax_items_cannot_hide_each_others_difference():
     )
 
     assert result["deferred_tax_difference_minor"] == 200
+
+
+def test_balance_bridge_does_not_add_other_adjustments_after_late_corrections():
+    journal = pd.DataFrame(
+        [
+            {
+                "voucher_id": "v1",
+                "account_code": "140501",
+                "debit_minor": 60,
+                "credit_minor": 0,
+            },
+            {
+                "voucher_id": "v1",
+                "account_code": "400201",
+                "debit_minor": 0,
+                "credit_minor": 60,
+            },
+        ]
+    )
+    trial_balance = pd.DataFrame(
+        [
+            {
+                "account_code": "140501",
+                "period_debit_minor": 60,
+                "period_credit_minor": 0,
+            },
+            {
+                "account_code": "400201",
+                "period_debit_minor": 0,
+                "period_credit_minor": 60,
+            },
+        ]
+    )
+    committed = pd.DataFrame(columns=["item_no", "adjustment_amount_minor"])
+    bridges = pd.DataFrame(
+        [
+            {
+                "family": "working_capital",
+                "record_type": "summary",
+                "item_no": 13,
+                "final_amount_minor": 0,
+            },
+            {
+                "family": "other_adjustments",
+                "target_item_no": 13,
+                "adjustment_minor": 60,
+            },
+        ]
+    )
+
+    result = calculate_reconciliation_inputs(
+        journal,
+        trial_balance,
+        committed,
+        pd.DataFrame(),
+        bridges,
+    )
+
+    assert result["balance_bridge_difference_minor"] == 0

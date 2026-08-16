@@ -1123,3 +1123,443 @@ def test_blocked_run_still_writes_diagnostic_files(minimal_config, tmp_path):
     assert diagnosis["next_action"]
     issues_text = (output_dir / "issues.jsonl").read_text(encoding="utf-8-sig")
     assert "UNCLASSIFIED_REMAINDER" in issues_text
+
+
+def test_share_payment_inventory_finalize_balance_bridge_does_not_double_count(
+    minimal_config,
+):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "权益结算股份支付形成未售存货", "1405", "库存商品", "140501",
+            "库存商品", 60, 0, "资本公积-权益结算股份支付", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "权益结算股份支付形成未售存货", "4002", "资本公积", "400201",
+            "资本公积-权益结算股份支付", 0, 60, "库存商品", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "140501", "库存商品", 1, "", "资产", 0, 0, 60, 0, 60, 0],
+        ["科目", "400201", "资本公积-权益结算股份支付", 1, "", "权益", 0, 0, 0, 60, 0, 60],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+    _update_config(minimal_config, net_profit_minor=0, direct_cfo_minor=0)
+
+    prepared = prepare_run(minimal_config)
+    assert prepared["ai_request_count"] == 0
+    result = finalize_run(Path(prepared["run_dir"]), None)
+
+    assert result["status"] == "exported"
+    reconciliation = json.loads(
+        (Path(prepared["run_dir"]) / "08_output" / "reconciliation.json")
+        .read_text(encoding="utf-8-sig")
+    )
+    balance_bridge = next(
+        check for check in reconciliation["checks"]
+        if check["check_id"] == "balance_bridge"
+    )
+    assert balance_bridge["status"] == "pass"
+    assert balance_bridge["difference_minor"] == 0
+
+
+def test_abnormal_intangible_amortization_issue_reaches_formal_entry(
+    minimal_config,
+):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "使用寿命不确定的无形资产错误摊销", "6602", "管理费用", "660201",
+            "管理费用-无形资产摊销", 10, 0, "累计摊销", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "使用寿命不确定的无形资产错误摊销", "1701", "无形资产", "170102",
+            "累计摊销", 0, 10, "管理费用", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "660201", "管理费用-无形资产摊销", 1, "", "损益", 0, 0, 10, 0, 0, 0],
+        ["科目", "170102", "累计摊销", 1, "", "资产", 0, 0, 0, 10, 0, 10],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    issues = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "family_issues.parquet"
+    )
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+
+    assert (issues["reason_code"] == "INTANGIBLE_AMORTIZATION_NOT_ALLOWED").any()
+    assert claims.loc[claims["item_no"].eq(4), "claim_amount_minor"].sum() == 1000
+
+
+def test_debt_restructuring_profit_reaches_item_sixteen(minimal_config):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "债务重组以资抵债确认收益", "2201", "应付账款", "220101",
+            "应付账款", 100, 0, "营业外收入", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "债务重组以资抵债确认收益", "6301", "营业外收入", "630101",
+            "营业外收入-债务重组利得", 0, 60, "应付账款", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "3",
+            "债务重组以资抵债确认收益", "1002", "银行存款", "100201",
+            "银行存款", 0, 40, "应付账款", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "220101", "应付账款", 1, "", "负债", 0, 100, 100, 0, 0, 0],
+        ["科目", "630101", "营业外收入-债务重组利得", 1, "", "损益", 0, 0, 0, 60, 0, 0],
+        ["科目", "100201", "银行存款", 1, "", "资产", 100, 0, 0, 40, 60, 0],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+
+    assert prepared["ai_request_count"] == 0
+    assert claims.loc[claims["item_no"].eq(16), "claim_amount_minor"].sum() == -6000
+    assert claims.loc[claims["item_no"].eq(15), "claim_amount_minor"].sum() == -4000
+
+
+def test_debt_restructuring_inventory_settlement_corrects_working_capital(
+    minimal_config,
+):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "债务重组以存货抵债", "2201", "应付账款", "220101",
+            "应付账款", 100, 0, "库存商品", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "债务重组以存货抵债", "1405", "库存商品", "140501",
+            "库存商品", 0, 80, "应付账款", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "3",
+            "债务重组以存货抵债", "6301", "营业外收入", "630101",
+            "营业外收入-债务重组利得", 0, 20, "应付账款", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "220101", "应付账款", 1, "", "负债", 0, 100, 100, 0, 0, 0],
+        ["科目", "140501", "库存商品", 1, "", "资产", 80, 0, 0, 80, 0, 0],
+        ["科目", "630101", "营业外收入-债务重组利得", 1, "", "损益", 0, 0, 0, 20, 0, 0],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+
+    assert prepared["ai_request_count"] == 0
+    assert claims.loc[claims["item_no"].eq(13)].empty
+    assert claims.loc[claims["item_no"].eq(15)].empty
+    assert claims.loc[claims["item_no"].eq(16), "claim_amount_minor"].sum() == -2000
+
+
+def test_shareholder_debt_waiver_is_not_ordinary_debt_restructuring(minimal_config):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "股东身份豁免债务作为权益性交易", "2201", "应付账款", "220101",
+            "应付账款", 100, 0, "资本公积", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "股东身份豁免债务作为权益性交易", "4002", "资本公积", "400201",
+            "资本公积-股东豁免", 0, 100, "应付账款", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "220101", "应付账款", 1, "", "负债", 0, 100, 100, 0, 0, 0],
+        ["科目", "400201", "资本公积-股东豁免", 1, "", "权益", 0, 0, 0, 100, 0, 100],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+    bridges = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "family_bridges.parquet"
+    )
+
+    assert claims.loc[claims["item_no"].eq(16)].empty
+    assert claims.loc[claims["item_no"].eq(15)].empty
+    assert bridges.query(
+        "family == 'other_adjustments' and reason_code == 'SHAREHOLDER_EQUITY_TRANSACTION'"
+    ).shape[0] >= 1
+
+
+def test_deferred_tax_balance_fallback_reaches_formal_entry(minimal_config):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "支付办公费用", "6602", "管理费用", "660299",
+            "管理费用-办公费", 10, 0, "银行存款", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "支付办公费用", "1002", "银行存款", "100201",
+            "银行存款", 0, 10, "管理费用", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "660299", "管理费用-办公费", 1, "", "损益", 0, 0, 10, 0, 0, 0],
+        ["科目", "100201", "银行存款", 1, "", "资产", 0, 0, 0, 10, 0, 0],
+        ["科目", "181101", "递延所得税资产", 1, "", "资产", 1000, 0, 0, 0, 400, 0],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+
+    assert prepared["ai_request_count"] == 0
+    assert claims.loc[claims["item_no"].eq(11), "claim_amount_minor"].sum() == 60000
+
+
+def test_ordinary_bank_deposit_interest_is_not_added_to_item_nine(minimal_config):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "银行存款利息收入", "1002", "银行存款", "100201",
+            "银行存款", 8, 0, "财务费用", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "银行存款利息收入", "6603", "财务费用", "660301",
+            "财务费用-存款利息收入", 0, 8, "银行存款", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "100201", "银行存款", 1, "", "资产", 0, 0, 8, 0, 8, 0],
+        ["科目", "660301", "财务费用-存款利息收入", 1, "", "损益", 0, 0, 0, 8, 0, 0],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+
+    assert prepared["ai_request_count"] == 0
+    assert claims.loc[claims["item_no"].eq(9)].empty
+
+
+def test_investment_product_interest_recorded_in_finance_cost_goes_item_nine(
+    minimal_config,
+):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "理财产品利息收入", "1002", "银行存款", "100201",
+            "银行存款", 8, 0, "财务费用", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "理财产品利息收入", "6603", "财务费用", "660301",
+            "财务费用-理财产品利息收入", 0, 8, "银行存款", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "100201", "银行存款", 1, "", "资产", 0, 0, 8, 0, 8, 0],
+        ["科目", "660301", "财务费用-理财产品利息收入", 1, "", "损益", 0, 0, 0, 8, 0, 0],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+
+    assert prepared["ai_request_count"] == 0
+    assert claims.loc[claims["item_no"].eq(9), "claim_amount_minor"].sum() == -800
+
+
+def test_recovery_of_written_off_amount_is_not_treated_as_reversal(minimal_config):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "收回已核销坏账款项", "1002", "银行存款", "100201",
+            "银行存款", 10, 0, "信用减值损失", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "收回已核销坏账款项", "6702", "信用减值损失", "670201",
+            "信用减值损失-收回已核销", 0, 10, "银行存款", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "100201", "银行存款", 1, "", "资产", 0, 0, 10, 0, 10, 0],
+        ["科目", "670201", "信用减值损失-收回已核销", 1, "", "损益", 0, 0, 0, 10, 0, 0],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+
+    assert prepared["ai_request_count"] == 0
+    assert claims.loc[claims["item_no"].eq(2)].empty
+
+
+def test_debt_restructuring_does_not_double_claim_investment_result(minimal_config):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    workbook = openpyxl.load_workbook(config["journal_path"])
+    journal = workbook[config["journal_sheet"]]
+    journal_rows = [
+        [
+            "2026-12-31", "12月", "记", "001", "1",
+            "债务重组以股权投资清偿", "2201", "应付账款", "220101",
+            "应付账款", 100, 0, "长期股权投资", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "2",
+            "债务重组以股权投资清偿", "1511", "长期股权投资", "151101",
+            "长期股权投资", 0, 70, "应付账款", "算法生成(兜底拆分)",
+        ],
+        [
+            "2026-12-31", "12月", "记", "001", "3",
+            "债务重组以股权投资清偿", "6111", "投资收益", "611101",
+            "投资收益-债务重组利得", 0, 30, "应付账款", "算法生成(兜底拆分)",
+        ],
+    ]
+    for row_index, values in enumerate(journal_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            journal.cell(row=row_index, column=column_index, value=value)
+    balance = workbook[config["trial_balance_sheet"]]
+    balance_rows = [
+        ["科目", "220101", "应付账款", 1, "", "负债", 0, 100, 100, 0, 0, 0],
+        ["科目", "151101", "长期股权投资", 1, "", "资产", 70, 0, 0, 70, 0, 0],
+        ["科目", "611101", "投资收益-债务重组利得", 1, "", "损益", 0, 0, 0, 30, 0, 0],
+    ]
+    for row_index, values in enumerate(balance_rows, start=2):
+        for column_index, value in enumerate(values, start=1):
+            balance.cell(row=row_index, column=column_index, value=value)
+    workbook.save(config["journal_path"])
+    workbook.close()
+
+    prepared = prepare_run(minimal_config)
+    claims = pd.read_parquet(
+        Path(prepared["run_dir"]) / "04_candidates" / "rule_claims.parquet"
+    )
+
+    assert prepared["ai_request_count"] == 0
+    assert claims.loc[claims["item_no"].eq(10), "claim_amount_minor"].sum() == -3000
+    assert claims.loc[claims["item_no"].eq(16)].empty
+    assert claims.loc[claims["item_no"].eq(15)].empty

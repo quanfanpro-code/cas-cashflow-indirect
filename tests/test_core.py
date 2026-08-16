@@ -1,4 +1,4 @@
-﻿from importlib import import_module
+from importlib import import_module
 
 import pandas as pd
 import pytest
@@ -254,3 +254,27 @@ def test_split_fragment_rejects_invalid_allocation(allocations):
 
     with pytest.raises(ValueError, match="分配"):
         core.split_fragment(fragment, allocations)
+
+
+def test_forex_gain_account_606_is_treated_as_income_when_marking_closing():
+    journal = pd.DataFrame(
+        [
+            {
+                "line_id": "line-fx",
+                "account_code": "6061",
+                "account_name": "汇兑收益",
+                "account_nature": "损益",
+                "counterparty_level1": "本年利润",
+                "match_type": "规则匹配",
+                "summary": "结转损益",
+                "signed_minor": 100,
+            }
+        ]
+    )
+
+    result = core.mark_technical_closing_lines(
+        journal,
+        {"本年利润", "利润分配"},
+    )
+
+    assert bool(result.loc[0, "technical_closing"])

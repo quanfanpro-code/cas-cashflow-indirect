@@ -441,6 +441,12 @@ def _family_results(
             "event_kind",
         ] = "writeoff"
         impairment_input.loc[
+            impairment_input["summary"].str.contains(
+                "收回已核销|已核销款项收回|收回原已核销", regex=True
+            ),
+            "event_kind",
+        ] = "recovery_of_writeoff"
+        impairment_input.loc[
             impairment_input["summary"].str.contains("转回|冲回|红字", regex=True),
             "event_kind",
         ] = "reversal"
@@ -526,7 +532,29 @@ def _family_results(
         noncash_input["affects_profit_or_loss"] = affects_profit.loc[
             noncash_input.index
         ]
-        noncash_input["accounting_status"] = "normal"
+        status_series = pd.Series("normal", index=noncash_input.index)
+        status_series[
+            noncash_text.str.contains("公允价值模式", regex=False)
+        ] = "fair_value_model"
+        status_series[
+            noncash_text.str.contains("已提足折旧|提足折旧", regex=True)
+        ] = "fully_depreciated"
+        status_series[
+            noncash_text.str.contains("单独计价.*土地", regex=True)
+        ] = "land"
+        status_series[
+            noncash_text.str.contains("使用寿命不确定|使用年限不确定", regex=True)
+        ] = "indefinite_life"
+        status_series[
+            noncash_text.str.contains(
+                "尚未达到预定用途|尚未可供使用|未达到可使用状态",
+                regex=True,
+            )
+        ] = "not_ready_for_use"
+        status_series[
+            noncash_text.str.contains("持有待售", regex=False)
+        ] = "held_for_sale"
+        noncash_input["accounting_status"] = status_series
         for _, row in noncash_input.loc[disposal_mask].iterrows():
             row_text = _joined_text(row)
             asset_class = str(row.get("asset_class", ""))
@@ -613,6 +641,16 @@ def _family_results(
                 term in value for term in ("处置", "出售", "丧失控制")
             ):
                 return "subsidiary_disposal"
+            if any(
+                term in value
+                for term in ("理财", "债券", "债权投资", "贷款")
+            ):
+                return "investment_interest"
+            if any(
+                term in value
+                for term in ("存款利息", "活期", "结算账户", "协定存款")
+            ):
+                return "operating_deposit_interest"
             if "手续费" in value or "结算费" in value:
                 return "bank_settlement_fee"
             if "经营性" in value and "汇兑" in value:
@@ -711,6 +749,71 @@ def _family_results(
             ].astype(str)
         )
 
+    covered_deferred_codes = (
+        set(deferred_input["account_code"].astype(str))
+        if not deferred_input.empty
+        else set()
+    )
+    fallback_rows: list[dict] = []
+    for _, balance_row in trial_balance.iterrows():
+        balance_name = str(balance_row["account_name"])
+        if (
+            "递延所得税资产" not in balance_name
+            and "递延所得税负债" not in balance_name
+        ):
+            continue
+        balance_code = str(balance_row["account_code"])
+        if balance_code in covered_deferred_codes:
+            continue
+        account_type = (
+            "deferred_tax_asset"
+            if "递延所得税资产" in balance_name
+            else "deferred_tax_liability"
+        )
+        if account_type == "deferred_tax_asset":
+            opening_gross = int(balance_row["opening_debit_minor"]) - int(
+                balance_row["opening_credit_minor"]
+            )
+            closing_gross = int(balance_row["closing_debit_minor"]) - int(
+                balance_row["closing_credit_minor"]
+            )
+        else:
+            opening_gross = int(balance_row["opening_credit_minor"]) - int(
+                balance_row["opening_debit_minor"]
+            )
+            closing_gross = int(balance_row["closing_credit_minor"]) - int(
+                balance_row["closing_debit_minor"]
+            )
+        fallback_rows.append(
+            {
+                "balance_row_id": balance_code,
+                "tax_entity_id": spec.entity_name,
+                "tax_jurisdiction": "默认税收管辖区",
+                "account_type": account_type,
+                "opening_gross_minor": opening_gross,
+                "closing_gross_minor": closing_gross,
+                "non_profit_change_minor": 0,
+            }
+        )
+    if fallback_rows:
+        fallback_claims, fallback_bridge = calculate_deferred_tax(
+            pd.DataFrame(), pd.DataFrame(fallback_rows)
+        )
+        claim_frames.append(fallback_claims)
+        bridge_frames.append(
+            fallback_bridge.assign(family="deferred_tax")
+        )
+        for claim in fallback_claims.to_dict("records"):
+            synthetic_rows.append(
+                _synthetic_fragment(
+                    fragments.columns.tolist(),
+                    str(claim["fragment_id"]),
+                    int(claim["claim_amount_minor"]),
+                    "递延所得税余额表兜底",
+                    business_event_id=str(claim["business_event_id"]),
+                )
+            )
+
     inventory_terms = tuple(rules.account_groups["存货"])
     receivable_terms = (
         *rules.account_groups["经营性应收"],
@@ -720,6 +823,98 @@ def _family_results(
         *rules.account_groups["经营性应付"],
         "其他应付款",
     )
+
+    debt_text_mask = text.str.contains(
+        "债务重组|债转股|以资抵债|非货币性资产交换|豁免债务|债务豁免|债务减免|减免债务",
+        regex=True,
+    )
+    debt_voucher_ids = set(
+        fragments.loc[debt_text_mask, "voucher_id"].astype(str)
+    )
+    debt_events: list[dict] = []
+    debt_correction_rows: list[dict] = []
+    claimed_by_other_families: set[str] = set(forced_ai_ids)
+    for frame in claim_frames:
+        if frame.empty or "fragment_id" not in frame:
+            continue
+        claimed_by_other_families.update(
+            frame.loc[
+                frame["decision"].isin({"included", "paired_offset"}),
+                "fragment_id",
+            ]
+            .astype(str)
+        )
+    if debt_voucher_ids:
+        debt_rows = fragments.loc[
+            fragments["voucher_id"].astype(str).isin(debt_voucher_ids)
+        ]
+        handled_ids.update(debt_rows["fragment_id"].astype(str))
+        inventory_mask = _account_group_mask(debt_rows, inventory_terms)
+        receivable_mask = _account_group_mask(debt_rows, receivable_terms)
+        payable_mask = _account_group_mask(debt_rows, payable_terms)
+        for voucher_id, rows in debt_rows.groupby("voucher_id", sort=False):
+            cash_signed = int(
+                rows.loc[
+                    rows["account_name"].astype(str).str.contains(
+                        "库存现金|银行存款|其他货币资金", regex=True
+                    ),
+                    "signed_minor",
+                ].sum()
+            )
+            profit_mask = rows["account_nature"].eq("损益") | rows[
+                "account_code"
+            ].astype(str).str.startswith("6")
+            profit_rows = rows.loc[profit_mask]
+            unclaimed_profit_rows = profit_rows.loc[
+                ~profit_rows["fragment_id"]
+                .astype(str)
+                .isin(claimed_by_other_families)
+            ]
+            profit = int(unclaimed_profit_rows["signed_minor"].sum())
+            voucher_text = rows.apply(_joined_text, axis=1).str.cat(sep=" ")
+            shareholder_related = (
+                "股东" in voucher_text or "权益性交易" in voucher_text
+            )
+            fragment_id = hashlib.sha256(
+                f"debt-restructuring\x1f{voucher_id}".encode("utf-8")
+            ).hexdigest()
+            event_id = f"debt-{voucher_id}"
+            synthetic = _synthetic_fragment(
+                fragments.columns.tolist(),
+                fragment_id,
+                profit,
+                str(rows.iloc[0]["summary"]),
+                business_event_id=event_id,
+            )
+            synthetic_rows.append(synthetic)
+            debt_events.append(
+                {
+                    "business_event_id": event_id,
+                    "event_type": "debt_restructuring",
+                    "source_fragment_id": fragment_id,
+                    "profit_effect_minor": profit,
+                    "shareholder_related": shareholder_related,
+                    "source_evidence": True,
+                }
+            )
+            group_masks = (
+                (inventory_mask, 13),
+                (receivable_mask, 14),
+                (payable_mask, 15),
+            )
+            for pool_mask, item_no in group_masks:
+                for row_index in rows.index[pool_mask.loc[rows.index]]:
+                    row = rows.loc[row_index]
+                    correction = int(row["signed_minor"]) + cash_signed
+                    if correction:
+                        debt_correction_rows.append(
+                            {
+                                "target_item_no": item_no,
+                                "correction_minor": correction,
+                                "reason_code": "DEBT_RESTRUCTURING_BALANCE_CORRECTION",
+                            }
+                        )
+
     inventory = _enrich_working_capital(
         trial_balance.loc[
             _account_group_mask(trial_balance, inventory_terms)
@@ -747,6 +942,18 @@ def _family_results(
         if not impairment_records.empty
         else pd.DataFrame()
     )
+    if debt_correction_rows:
+        corrections = pd.concat(
+            [
+                corrections,
+                pd.DataFrame(
+                    debt_correction_rows,
+                    columns=["target_item_no", "correction_minor", "reason_code"],
+                ),
+            ],
+            ignore_index=True,
+            sort=False,
+        )
     auxiliary_enriched = auxiliary.copy()
     if not auxiliary_enriched.empty:
         dimension_names = auxiliary_enriched["dimension_name"].fillna("").astype(str)
@@ -843,10 +1050,10 @@ def _family_results(
         sort=False,
     )
     other_bridge = pd.DataFrame()
-    if not other_input.empty:
+    if not other_input.empty or grant_events or debt_events:
         other_claims, other_bridge = calculate_other_adjustments(
             other_input,
-            pd.DataFrame(grant_events),
+            pd.DataFrame(grant_events + debt_events),
             pd.DataFrame(),
         )
         claim_frames.append(other_claims)

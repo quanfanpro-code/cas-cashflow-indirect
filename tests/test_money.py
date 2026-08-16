@@ -1,4 +1,4 @@
-﻿from decimal import Decimal
+from decimal import Decimal
 from importlib import import_module
 
 import pytest
@@ -35,6 +35,10 @@ def test_parse_minor_accepts_excel_binary_float_tail():
 def test_parse_minor_rejects_hidden_fraction_below_scale(raw):
     with pytest.raises(money.MoneyPrecisionError):
         money.parse_minor(raw, 2)
+
+
+def test_parse_minor_accepts_full_width_minus():
+    assert money.parse_minor("－1,234.56", 2) == -123456
 
 
 @pytest.mark.parametrize(

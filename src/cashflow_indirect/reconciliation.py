@@ -247,20 +247,8 @@ def calculate_reconciliation_inputs(
         for item_no, amount in paired.groupby("_item_no")["_amount"].sum().items():
             expected[int(item_no)] -= int(amount)
 
-        other = bridges.loc[
-            family.eq("other_adjustments")
-            & target_item.isin({13, 14, 15})
-        ].copy()
-        other["_item_no"] = target_item.loc[other.index].astype(int)
-        other["_amount"] = pd.to_numeric(
-            other.get(
-                "adjustment_minor",
-                pd.Series(0, index=other.index),
-            ),
-            errors="coerce",
-        ).fillna(0)
-        for item_no, amount in other.groupby("_item_no")["_amount"].sum().items():
-            expected[int(item_no)] += int(amount)
+        # 第13/14/15项晚到修正（如股份支付进入存货）已在 prepare 阶段
+        # 回写营运资本汇总，余额桥接不再叠加 other_adjustments，避免重复计算。
 
     balance_bridge_difference = sum(
         abs(int(occupied.get(item_no, 0)) - expected[item_no])

@@ -1,4 +1,4 @@
-﻿"""金额的精确换算。"""
+"""金额的精确换算。"""
 
 from decimal import Decimal, InvalidOperation
 
@@ -14,7 +14,7 @@ class MoneyPrecisionError(ValueError):
 def parse_minor(value: object, scale: int = 2) -> int:
     if value is None or str(value).strip() == "":
         return 0
-    text = str(value).strip().replace(",", "").replace("，", "")
+    text = str(value).strip().replace(",", "").replace("，", "").replace("－", "-")
     negative = text.startswith("(") and text.endswith(")")
     if negative:
         text = text[1:-1].strip()

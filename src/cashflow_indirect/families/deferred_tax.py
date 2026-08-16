@@ -1,4 +1,4 @@
-﻿"""第11、12项递延所得税损益路径和余额桥接。"""
+"""第11、12项递延所得税损益路径和余额桥接。"""
 
 import pandas as pd
 
@@ -212,7 +212,10 @@ def _from_trial_balance(trial_balance: pd.DataFrame) -> tuple[list[dict], list[d
             profit_balance_change,
         )
         del item_no
-        fragment_id = f"tb-{entity}-{jurisdiction}-{account_type}"
+        row_key = str(row.get("balance_row_id", "")) or (
+            f"{entity}-{jurisdiction}-{account_type}"
+        )
+        fragment_id = f"tb-{row_key}"
         if profit_effect:
             claims.append(
                 _claim(

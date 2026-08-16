@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 
 技能目录 = Path(__file__).resolve().parents[1]
@@ -16,3 +16,10 @@ def test_技能说明引导完整的输入和会计判断流程():
     assert "不得根据序时账推算值代填" in 内容
     assert "达到实际执行重要性且存在强冲突证据" in 内容
     assert "唯一首选建议" in 内容
+
+
+def test_技能说明引导金融企业标志():
+    内容 = (技能目录 / "SKILL.md").read_text(encoding="utf-8-sig")
+
+    assert "financial_entity_flag" in 内容
+    assert "金融企业" in 内容

@@ -695,7 +695,7 @@ def write_audit_workbook(
     fmt = _formats(workbook)
     result_sheet = workbook.add_worksheet(_RESULT_SHEET)
     full_sheet = workbook.add_worksheet(_FULL_JOURNAL_SHEET)
-    _write_full_journal_sheet(
+    full_header_row, _full_data_rows = _write_full_journal_sheet(
         full_sheet,
         fmt,
         journal_header,
@@ -703,7 +703,7 @@ def write_audit_workbook(
         journal_header_row,
         relevant_rows_by_item,
     )
-    full_sheet.freeze_panes(1, 3)
+    full_sheet.freeze_panes(full_header_row + 1, 3)
     full_sheet.set_column(
         0, len(journal_header) + 1 - 1, 16
     )
@@ -818,7 +818,7 @@ def write_audit_workbook(
             annotation_index,
             relevant_rows_by_item.get(item_no, set()),
         )
-        sheet.freeze_panes(header_row, 3)
+        sheet.freeze_panes(header_row + 1, 3)
         total_cols = len(journal_header) + len(ANNOTATION_FIELDS)
         sheet.autofilter(
             header_row,

@@ -1,4 +1,4 @@
-﻿import pandas as pd
+import pandas as pd
 
 from cashflow_indirect.families.deferred_tax import calculate_deferred_tax
 
@@ -219,3 +219,33 @@ def test_unknown_deferred_tax_route_is_sent_to_ai_instead_of_assumed_profit():
     assert claims.empty
     assert bridge["reason_code"].tolist() == ["UNKNOWN_ROUTE"]
     assert bridge["next_action"].tolist() == ["ai_request"]
+
+
+def test_balance_fallback_fragment_ids_are_unique_per_balance_row():
+    trial_balance = pd.DataFrame(
+        [
+            {
+                "balance_row_id": "181101",
+                "tax_entity_id": "entity-a",
+                "tax_jurisdiction": "CN",
+                "account_type": "deferred_tax_asset",
+                "opening_gross_minor": 100000,
+                "closing_gross_minor": 80000,
+                "non_profit_change_minor": 0,
+            },
+            {
+                "balance_row_id": "181102",
+                "tax_entity_id": "entity-a",
+                "tax_jurisdiction": "CN",
+                "account_type": "deferred_tax_asset",
+                "opening_gross_minor": 50000,
+                "closing_gross_minor": 30000,
+                "non_profit_change_minor": 0,
+            },
+        ]
+    )
+
+    claims, _ = calculate_deferred_tax(pd.DataFrame(), trial_balance)
+
+    assert claims["fragment_id"].is_unique
+    assert set(claims["fragment_id"]) == {"tb-181101", "tb-181102"}

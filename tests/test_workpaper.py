@@ -1,4 +1,4 @@
-﻿"""项目索引与逐行注释测试。"""
+"""项目索引与逐行注释测试。"""
 
 from importlib import import_module
 
@@ -368,6 +368,15 @@ def test_workbook_has_thirty_two_bidirectional_links(
             ]
             assert len(back_links) == 1
             assert back_links[0].hyperlink.location == "'附表结果'!A1"
+    finally:
+        workbook.close()
+
+
+def test_full_journal_sheet_freezes_title_and_header_rows(workpaper_input):
+    result = workpaper.write_audit_workbook(**workpaper_input)
+    workbook = openpyxl.load_workbook(result["path"], read_only=False)
+    try:
+        assert workbook["全量序时账"].freeze_panes == "D3"
     finally:
         workbook.close()
 
