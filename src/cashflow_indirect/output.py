@@ -1,4 +1,4 @@
-"""正式机器结果和Excel结果输出（标准18张表底稿或急速2表加MD）。"""
+﻿"""正式机器结果和Excel结果输出（标准18张表底稿或急速2表加MD）。"""
 
 import json
 from pathlib import Path
@@ -151,6 +151,7 @@ def export_results(
     journal_sheet: str,
     journal_header_row: int,
     output_mode: str = "standard",
+    account_labels: dict[str, str] | None = None,
 ) -> dict:
     """先冻结机器结果，再生成Excel；Excel失败时机器结果保持可重试。"""
     output_dir = Path(output_dir)
@@ -232,6 +233,7 @@ def export_results(
                 journal_snapshot=journal_snapshot,
                 journal_sheet=journal_sheet,
                 journal_header_row=journal_header_row,
+                account_labels=account_labels,
             )
             md_result = write_item_markdowns(
                 output_dir=output_dir / "底稿MD",
@@ -259,6 +261,7 @@ def export_results(
                 journal_snapshot=journal_snapshot,
                 journal_sheet=journal_sheet,
                 journal_header_row=journal_header_row,
+                account_labels=account_labels,
             )
     except (
         OSError,

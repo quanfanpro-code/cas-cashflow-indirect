@@ -1,4 +1,4 @@
-import json
+﻿import json
 from pathlib import Path
 import shutil
 
@@ -990,7 +990,7 @@ def test_finalize_uses_rapid_output_mode_from_config(minimal_config, tmp_path):
     assert state["output_mode"] == "rapid"
 
     workbook = openpyxl.load_workbook(result["workbook_path"], read_only=True)
-    assert workbook.sheetnames == ["附表结果", "简报"]
+    assert workbook.sheetnames == ["附表结果", "简报", "机器用复核数据"]
     brief = workbook["简报"]
     brief_map = {
         row[0].value: row[1].value for row in brief.iter_rows(max_col=2)
@@ -1022,7 +1022,7 @@ def test_finalize_defaults_to_standard_output_mode(minimal_config, tmp_path):
     workbook = openpyxl.load_workbook(result["workbook_path"], read_only=True)
     sheet_count = len(workbook.sheetnames)
     workbook.close()
-    assert sheet_count == 18
+    assert sheet_count == 19
     assert not (Path(prepared["run_dir"]) / "08_output" / "底稿MD").exists()
 
 

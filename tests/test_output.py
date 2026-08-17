@@ -241,7 +241,7 @@ def test_workbook_has_fixed_eighteen_sheets_and_manifest_is_portable(
     )
     expected_sheets = ["附表结果", "全量序时账"] + [
         f"{item.item_no:02d}{item.name}" for item in rule_book.items
-    ]
+    ] + ["机器用复核数据"]
     assert workbook.sheetnames == expected_sheets
     assert all(not Path(entry["path"]).is_absolute() for entry in manifest["files"])
     assert all(len(entry["sha256"]) == 64 for entry in manifest["files"])
@@ -403,7 +403,7 @@ def test_rapid_mode_exports_two_sheets_and_sixteen_markdowns(
         read_only=True,
     )
     try:
-        assert workbook.sheetnames == ["附表结果", "简报"]
+        assert workbook.sheetnames == ["附表结果", "简报", "机器用复核数据"]
     finally:
         workbook.close()
     workbook_entry = next(

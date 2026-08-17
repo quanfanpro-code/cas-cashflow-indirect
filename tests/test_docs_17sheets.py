@@ -1,11 +1,11 @@
-"""18张表审计底稿文档一致性检查。"""
+﻿"""18张表审计底稿文档一致性检查。"""
 
 from pathlib import Path
 
 技能目录 = Path(__file__).resolve().parents[1]
 
 
-def test_正式输出协议描述18张表和全量序时账():
+def test_正式输出协议描述19张表和全量序时账():
     协议 = (
         技能目录
         / "references"
@@ -13,9 +13,10 @@ def test_正式输出协议描述18张表和全量序时账():
         / "现金流量表附表间接法_正式输出协议.md"
     ).read_text(encoding="utf-8-sig")
 
-    assert "18" in 协议 or "十八" in 协议
+    assert "19" in 协议 or "十九" in 协议
     assert "附表结果" in 协议
     assert "全量序时账" in 协议
+    assert "机器用复核数据" in 协议
     assert "链接" in 协议
     assert "判断轨迹" in 协议
 
@@ -32,10 +33,10 @@ def test_留痕协议包含判断轨迹():
     assert "decision_trace" in 协议
 
 
-def test_README用大白话说明18张表查看方法():
+def test_README用大白话说明19张表查看方法():
     内容 = (技能目录 / "README.md").read_text(encoding="utf-8-sig")
 
-    assert "18" in 内容
+    assert "19" in 内容
     assert "全量序时账" in 内容
     assert "返回" in 内容
     assert "底稿" in 内容

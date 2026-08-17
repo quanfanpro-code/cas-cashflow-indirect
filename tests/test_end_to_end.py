@@ -804,6 +804,13 @@ def test_decision_trace_and_item_sheets_keep_reason_and_evidence(tmp_path):
             if cell.value is not None
         )
         assert "报废" in item7_text
-        assert "未采用" in item7_text or "备选" in item7_text
+        machine_sheet = workbook["机器用复核数据"]
+        machine_text = " ".join(
+            str(cell.value)
+            for row in machine_sheet.iter_rows()
+            for cell in row
+            if cell.value is not None
+        )
+        assert "机器金额编号" in machine_text and "内部规则编号" in machine_text
     finally:
         workbook.close()

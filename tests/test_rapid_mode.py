@@ -1,4 +1,4 @@
-"""急速模式输出测试：2 个 sheet 的 xlsx + 16 个同名 MD 底稿。"""
+﻿"""急速模式输出测试：2 个 sheet 的 xlsx + 16 个同名 MD 底稿。"""
 
 from types import SimpleNamespace
 
@@ -163,7 +163,7 @@ def test_rapid_workbook_has_two_sheets(rapid_input):
     )
     workbook = openpyxl.load_workbook(result["path"], read_only=False)
     try:
-        assert workbook.sheetnames == ["附表结果", "简报"]
+        assert workbook.sheetnames == ["附表结果", "简报", "机器用复核数据"]
     finally:
         workbook.close()
 
@@ -188,8 +188,8 @@ def test_rapid_mode_writes_sixteen_markdowns(rapid_input, rule_book):
         assert expected.is_file(), f"缺少 {expected.name}"
         content = expected.read_text(encoding="utf-8-sig")
         assert "审计底稿" in content
-        assert "冻结金额" in content
+        assert "本项目最终金额" in content
     item1 = (md_dir / "01资产减值准备.md").read_text(encoding="utf-8-sig")
     assert "计提跌价准备" in item1
     assert "计入当期损益的减值" in item1
-    assert "未命中" in item1
+    assert "其余凭证行说明" in item1

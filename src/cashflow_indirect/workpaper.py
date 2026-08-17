@@ -1,4 +1,4 @@
-"""项目注释索引和审计底稿工作簿生成。"""
+﻿"""项目注释索引和审计底稿工作簿生成。"""
 
 from pathlib import Path
 
@@ -33,30 +33,85 @@ ANNOTATION_FIELDS = (
     "金额片段标识",
 )
 
+MACHINE_REFERENCE_SHEET = "机器用复核数据"
+
 _FINAL_DECISION_TEXT = {
-    "included": "纳入",
-    "excluded": "排除",
-    "reclassified": "改归",
-    "review_required": "人工升级",
-    "paired_offset": "配套抵销",
-    "ai_classified": "纳入",
+    "included": "算进本项目，影响经营活动现金流",
+    "excluded": "不算进本项目，不影响经营活动现金流",
+    "reclassified": "改归其他项目，本项目不算，由其他项目算",
+    "review_required": "需人工复核",
+    "paired_offset": "按准则需在两个项目同时反映，不是重复计算",
+    "ai_classified": "算进本项目，影响经营活动现金流",
 }
 
-_OCCUPANCY_TEXT = {
-    "exclusive": "独占占用",
-    "paired_offset": "配套抵销",
-    "": "未占用",
+_ROW_RELATION_TEXT = {
+    "算进本项目，影响经营活动现金流": "本行算进本项目，影响经营活动现金流",
+    "不算进本项目，不影响经营活动现金流": "本行不算进本项目，不影响经营活动现金流",
+    "改归其他项目，本项目不算，由其他项目算": "本行改归其他项目，本项目不算，由其他项目算",
+    "按准则需在两个项目同时反映，不是重复计算": "本行按准则需在两个项目同时反映，不是重复计算",
 }
+
+_RULE_DISPLAY_TEXT = {
+    "NONCASH-DEPRECIATION": "本期计提折旧，没有付现金，所以要加回",
+    "NONCASH-LONG-PREPAID": "本期摊销长期待摊费用，没有付现金，所以要加回",
+    "FIN-NONOPERATING-FINANCE-COST": "属于筹资、投资性质的财务费用，所以要加回",
+    "FIN-INVESTMENT-RESULT": "投资损益不属于经营活动，所以要剔除",
+    "WC-ITEM-13": "按存货科目期初、期末余额计算",
+    "WC-ITEM-14": "按应收科目期初、期末余额计算",
+    "WC-ITEM-15": "按应付科目期初、期末余额计算",
+    "IMP-ASSET": "按资产减值损失的实际损益影响计算",
+    "IMP-CREDIT": "按信用减值损失的实际损益影响计算",
+    "TAX-DEFERRED-PROFIT-ROUTE": "按递延所得税变动中影响净利润的部分计算",
+    "TAX-DEFERRED-BALANCE-FALLBACK": "按递延所得税科目期初、期末余额计算",
+}
+
+_RESULT_CHECK_STATUS_TEXT = {
+    "pass": "通过",
+    "fail": "未通过",
+    "warning": "有提醒",
+}
+
+_RECONCILIATION_STATUS_TEXT = {
+    "pass": "已通过",
+    "fail": "未通过",
+    "warning": "有提醒",
+}
+
+_JOURNAL_DISPLAY_HEADERS = {
+    "Unnamed: 0": "原始行号",
+    "匹配类型": "对方科目是怎么匹配出来的",
+    "候选项目": "可能涉及哪些附表项目",
+}
+
+_MATCH_TYPE_DISPLAY = {
+    "标准模板": "按标准模板匹配",
+    "算法生成": "按金额算法匹配",
+    "算法生成(兜底拆分)": "按金额算法匹配（拆分明细）",
+    "算法生成(异常剩余)": "算法匹配后的剩余行（建议留意）",
+    "结转损益规则": "损益结转规则",
+}
+
+
+def _display_header(header: object) -> str:
+    text = "" if header is None else str(header)
+    return _JOURNAL_DISPLAY_HEADERS.get(text, text)
+
+
+def _display_journal_value(header: object, value: object) -> object:
+    text = "" if header is None else str(header)
+    if text == "匹配类型" and isinstance(value, str):
+        return _MATCH_TYPE_DISPLAY.get(value, value)
+    return value
 
 
 def _unmatched_annotation() -> dict:
     return {
-        "项目筛选状态": "本项目未命中",
+        "项目筛选状态": "不属于本项目",
         "规则编号": "",
-        "最终判断": "未命中",
+        "最终判断": "不算进本项目，不影响经营活动现金流",
         "原始金额片段": "",
         "本项目调节金额": 0,
-        "计算过程说明": "该原始行未进入本项目的候选筛选",
+        "计算过程说明": "该行没有进入本项目，所以没有金额处理",
         "规则判断理由": "",
         "是否人工智能判断": "否",
         "人工智能建议": "",
@@ -66,7 +121,7 @@ def _unmatched_annotation() -> dict:
         "未采用方案": "",
         "置信度": "",
         "是否人工升级": "否",
-        "最终采用处理": "未命中",
+        "最终采用处理": "本行不算进本项目，不影响经营活动现金流",
         "申请占用金额": 0,
         "实际消耗金额": 0,
         "剩余未分类金额": 0,
@@ -155,7 +210,7 @@ def _annotate_rows(rows: pd.DataFrame) -> dict:
         and not pd.isna(row.get("confidence"))
     ]
     confidence_text = (
-        f"{sum(confidences) / len(confidences):.2f}" if confidences else ""
+        f"{sum(confidences) / len(confidences) * 100:.0f}%" if confidences else ""
     )
     human_review = any(
         bool(row.get("human_review_required", False)) for row in ordered
@@ -165,14 +220,14 @@ def _annotate_rows(rows: pd.DataFrame) -> dict:
         for row in ordered
     )
     return {
-        "项目筛选状态": "命中",
+        "项目筛选状态": "属于本项目",
         "规则编号": _join_unique(
             [row.get("rule_id", "") for row in ordered]
         ),
         "最终判断": decision_text,
         "原始金额片段": claim_amount + remaining,
         "本项目调节金额": claim_amount,
-        "计算过程说明": _OCCUPANCY_TEXT.get(occupancy_type, occupancy_type),
+        "计算过程说明": "这笔金额只出现一次，不会重复计算",
         "规则判断理由": _join_unique(
             [row.get("decision_reason", "") for row in ordered]
         ),
@@ -201,11 +256,11 @@ def _annotate_rows(rows: pd.DataFrame) -> dict:
         "占用类型": occupancy_type,
         "配套抵销标识": paired_text,
         "防重复核对结论": (
-            "配套抵销共同占用" if occupancy_type == "paired_offset"
-            else "唯一占用" if occupancy_type == "exclusive"
+            "按准则需在两个项目同时反映，不是重复计算" if occupancy_type == "paired_offset"
+            else "这笔金额只出现一次，没有重复" if occupancy_type == "exclusive"
             else "不适用"
         ),
-        "项目核对结论": "已纳入本项目，请以明细合计与差异公式复核",
+        "项目核对结论": "已计入本项目，请用明细合计和差异公式复核",
         "业务事件标识": _join_unique(
             [row.get("business_event_id", "") for row in ordered]
         ),
@@ -348,6 +403,58 @@ def _write_value(
         worksheet.write_string(row, col, str(value), cell_format)
 
 
+def _bridge_source_text(
+    bridge: pd.Series,
+    account_labels: dict[str, str] | None,
+) -> str:
+    source_kind = str(bridge.get("source_kind", "") or "")
+    account_code = str(bridge.get("account_code", "") or "")
+    if source_kind == "auxiliary":
+        return "辅助核算：" + account_code
+    if source_kind == "correction":
+        return "非现金、非经营修正"
+    if account_code:
+        labels = account_labels or {}
+        account_name = labels.get(account_code, "")
+        if account_name:
+            return f"科目余额表：{account_code} {account_name}"
+        return f"科目余额表：{account_code}"
+    if source_kind == "trial_balance_fallback":
+        return "科目余额表"
+    return "其他来源"
+
+
+def _bridge_reason_text(item_no: int, bridge: pd.Series) -> str:
+    reason_code = str(bridge.get("reason_code", "") or "")
+    if reason_code == "OPERATING_BALANCE_INCLUDED":
+        return {
+            13: "存货减少说明卖掉了存货、结转了成本，要加回；存货增加要扣减",
+            14: "应收减少说明收回了钱，要加回；应收增加说明钱还没收到，要扣减",
+            15: "应付增加说明钱还没付，要加回；应付减少说明多付了钱，要扣减",
+        }.get(item_no, "科目余额变化中，真正和经营现金有关的部分")
+    if reason_code == "NONOPERATING_BALANCE":
+        return "这笔余额变动不属于经营活动，所以不计入本项目"
+    if reason_code == "GOVERNMENT_GRANT_TO_ITEM16":
+        return "政府补助单独在第16项处理，不在这里重复"
+    if reason_code == "WORKING_CAPITAL_SUMMARY":
+        return "上面各行加总，就是本项目最终金额"
+    if reason_code == "ALLOWANCE_WRITEOFF":
+        return "存货跌价准备核销原值，不能重复算作经营现金"
+    if reason_code == "DIRECT_BAD_DEBT_ALREADY_ADJUSTED":
+        return "坏账损失已经在第2项加回，应收减少要剔除，避免重复"
+    if reason_code == "DEBT_RESTRUCTURING_BALANCE_CORRECTION":
+        return "债务重组、债务豁免等没有发生现金收付，要从余额变化里剔除"
+    if reason_code == "PROFIT_ROUTE":
+        return "这笔递延所得税变动影响了净利润，计入本项目"
+    if reason_code == "NON_PROFIT_ROUTE":
+        return "这笔递延所得税变动没有影响净利润，不计入本项目"
+    if reason_code == "TECHNICAL_CLOSING":
+        return "结转分录，不影响本项目"
+    if reason_code == "GROSS_BALANCE_FALLBACK":
+        return "按科目期初、期末余额计算，已剔除非经营变化"
+    return str(bridge.get("reason", "") or "")
+
+
 def _item_top_area(
     worksheet,
     fmt: dict,
@@ -357,6 +464,8 @@ def _item_top_area(
     divisor: int,
     bridges: pd.DataFrame,
     issues: pd.DataFrame,
+    display_unit: str = "元",
+    account_labels: dict[str, str] | None = None,
 ) -> int:
     """写项目顶部区域，返回下一可用行（0-based）。"""
     row = 0
@@ -372,62 +481,80 @@ def _item_top_area(
         "返回附表结果",
     )
     row += 1
-    worksheet.write(row, 0, "项目冻结金额", fmt["bold"])
+    worksheet.write(row, 0, "本项目最终金额", fmt["bold"])
     worksheet.write_number(row, 1, frozen_amount / divisor, fmt["money"])
     row += 2
 
-    worksheet.write(row, 0, "余额桥接", fmt["bold"])
+    worksheet.write(row, 0, "从科目余额表怎么算出本项目", fmt["bold"])
     row += 1
     item_bridges = _frame_items(bridges, item_no)
     if item_bridges.empty:
-        worksheet.write(row, 0, "不适用", fmt["body"])
+        worksheet.write(row, 0, "本项目不用科目余额表计算", fmt["body"])
         row += 1
     else:
         bridge_headers = [
-            "来源维度", "期初余额", "期末余额", "修正金额", "最终金额",
-            "桥接说明",
+            "取数来源", "期初余额", "期末余额",
+            "需要剔除的金额", "计入本项目金额",
+            "一句话说明",
         ]
         for col, header in enumerate(bridge_headers):
             worksheet.write(row, col, header, fmt["header"])
         row += 1
         for _, bridge in item_bridges.iterrows():
             values = [
-                bridge.get("source_kind", "") or "",
+                _bridge_source_text(bridge, account_labels),
                 float(bridge.get("opening_minor", 0) or 0) / divisor,
                 float(bridge.get("closing_minor", 0) or 0) / divisor,
                 float(bridge.get("corrections_minor", 0) or 0) / divisor,
                 float(bridge.get("final_amount_minor", 0) or 0) / divisor,
-                bridge.get("reason", "") or "",
+                _bridge_reason_text(item_no, bridge),
             ]
             for col, value in enumerate(values):
                 _write_value(worksheet, row, col, value, fmt, money=col in (1, 2, 3, 4))
             row += 1
     row += 1
 
-    worksheet.write(row, 0, "本项目异常", fmt["bold"])
+    worksheet.write(row, 0, "需要留意的异常情况", fmt["bold"])
     row += 1
     item_issues = _frame_items(issues, item_no)
     if item_issues.empty:
-        worksheet.write(row, 0, "无", fmt["body"])
+        worksheet.write(row, 0, "没有发现异常", fmt["body"])
         row += 1
     else:
-        issue_headers = ["异常类型", "金额", "事实描述", "AI建议", "最终采用处理"]
+        issue_headers = [
+            "异常类型", "金额", "事实描述",
+            "AI建议", "最终怎么处理",
+        ]
         for col, header in enumerate(issue_headers):
             worksheet.write(row, col, header, fmt["header"])
         row += 1
         for _, issue in item_issues.iterrows():
+            final = issue.get("final_decision", "") or ""
             values = [
                 issue.get("issue_code", "") or "",
                 float(issue.get("amount_minor", 0) or 0) / divisor,
                 issue.get("reason", "") or "",
                 issue.get("recommendation", "") or "",
-                issue.get("final_decision", "") or "",
+                _FINAL_DECISION_TEXT.get(str(final), str(final)),
             ]
             for col, value in enumerate(values):
                 _write_value(worksheet, row, col, value, fmt, money=col == 1)
             row += 1
     row += 1
     return row
+
+
+def _detail_reason(item_no: int, detail: pd.Series) -> str:
+    reason = str(detail.get("reason", "") or "")
+    if reason:
+        return reason
+    return {
+        3: "计提折旧没有付现金，但已经减少了利润，所以要加回",
+        4: "无形资产摊销没有付现金，但已经减少了利润，所以要加回",
+        5: "长期待摊费用摊销没有付现金，但已经减少了利润，所以要加回",
+        14: "应收科目余额变化中，真正和经营现金有关的部分",
+        15: "应付科目余额变化中，真正和经营现金有关的部分",
+    }.get(item_no, "按已确认规则处理")
 
 
 def _write_item_detail_region(
@@ -437,14 +564,17 @@ def _write_item_detail_region(
     item_no: int,
     details: pd.DataFrame,
     divisor: int,
+    display_unit: str = "元",
 ) -> int:
-    """写逐片段明细和合计、差异公式，返回下一可用行（0-based）。"""
+    """写逐笔计算明细和合计、差异公式，返回下一可用行（0-based）。"""
     row = start_row
-    worksheet.write(row, 0, "本项目判断明细", fmt["bold"])
+    worksheet.write(row, 0, "逐笔计算明细", fmt["bold"])
     row += 1
     detail_headers = [
-        "金额片段标识", "业务事件标识", "凭证日期", "凭证号", "摘要",
-        "原始金额", "纳入金额", "处理结论", "规则编号", "纳入或排除理由",
+        "凭证日期", "凭证号", "摘要",
+        f"原始金额",
+        "计入本项目金额",
+        "处理结果", "取数口径", "为什么这样处理",
     ]
     for col, header in enumerate(detail_headers):
         worksheet.write(row, col, header, fmt["header"])
@@ -452,43 +582,51 @@ def _write_item_detail_region(
     detail_start_excel = row + 1
     item_details = _frame_items(details, item_no)
     if item_details.empty:
-        worksheet.write(row, 0, "无明细", fmt["body"])
+        worksheet.write(row, 0, "没有逐笔明细", fmt["body"])
         row += 1
         detail_end_excel = row
     else:
         for _, detail in item_details.iterrows():
+            decision = detail.get("decision", "") or ""
+            rule_id = detail.get("rule_id", "") or ""
             values = [
-                detail.get("fragment_id", "") or "",
-                detail.get("business_event_id", "") or "",
                 detail.get("voucher_date", "") or "",
                 detail.get("voucher_no", "") or "",
                 detail.get("summary", "") or "",
                 float(detail.get("source_amount_minor", 0) or 0) / divisor,
                 float(detail.get("adjustment_amount_minor", 0) or 0) / divisor,
-                detail.get("decision", "") or "",
-                detail.get("rule_id", "") or "",
-                detail.get("reason", "") or "",
+                _FINAL_DECISION_TEXT.get(str(decision), str(decision)),
+                _RULE_DISPLAY_TEXT.get(str(rule_id), "按已确认规则处理"),
+                _detail_reason(item_no, detail),
             ]
             for col, value in enumerate(values):
-                _write_value(worksheet, row, col, value, fmt, money=col in (5, 6))
+                _write_value(worksheet, row, col, value, fmt, money=col in (3, 4))
             row += 1
         detail_end_excel = row
 
-    worksheet.write(row, 5, "明细合计", fmt["bold"])
+    worksheet.write(row, 4, "明细合计", fmt["bold"])
     worksheet.write_formula(
         row,
-        6,
-        f"=SUM(G{detail_start_excel}:G{detail_end_excel})",
+        5,
+        f"=SUM(F{detail_start_excel}:F{detail_end_excel})",
         fmt["money"],
     )
     total_row_excel = row + 1
     row += 1
-    worksheet.write(row, 5, "差异（冻结金额减明细合计）", fmt["body"])
+    worksheet.write(row, 4, "差异（本项目最终金额减明细合计）", fmt["body"])
     worksheet.write_formula(
-        row, 6, f"=B3-G{total_row_excel}", fmt["money"]
+        row, 5, f"=B3-F{total_row_excel}", fmt["money"]
     )
     row += 1
     return row
+
+
+def _row_relation_text(annotation: dict) -> str:
+    final = str(annotation.get("最终判断", ""))
+    return _ROW_RELATION_TEXT.get(
+        final,
+        "本行不算进本项目，不影响经营活动现金流",
+    )
 
 
 def _write_full_journal_region(
@@ -502,11 +640,7 @@ def _write_full_journal_region(
     annotation_index: dict,
     relevant_rows: set[int],
 ) -> tuple[int, int]:
-    """流式写入本项目相关序时账行及右侧项目注释，返回(表头行0-based, 数据行数)。
-
-    只写进入本项目候选筛选的行（命中/排除/改归），无关行不逐行展示，
-    顶部以统计说明未命中数量。
-    """
+    """写本项目相关凭证行，右侧只加一列人话关系说明。"""
     row = start_row
     total = len(journal_records)
     unmatched = total - len(relevant_rows)
@@ -514,18 +648,19 @@ def _write_full_journal_region(
         row,
         0,
         (
-            f"本项目相关序时账（序时账共{total}行，本项目候选"
-            f"{len(relevant_rows)}行，其余{unmatched}行未命中不逐行展示）"
+            f"本项目相关的凭证行（序时账共{total}行，本项目涉及"
+            f"{len(relevant_rows)}行，其余{unmatched}行不逐行展示）"
         ),
         fmt["bold"],
     )
     row += 1
     header_row = row
-    headers = list(journal_header) + list(ANNOTATION_FIELDS)
-    for col, header in enumerate(headers):
-        if header is None or header == "":
-            continue
-        worksheet.write(row, col, header, fmt["header"])
+    for col, header in enumerate(journal_header):
+        display = _display_header(header)
+        if display:
+            worksheet.write(row, col, display, fmt["header"])
+    relation_col = len(journal_header)
+    worksheet.write(row, relation_col, "本行和本项目的关系", fmt["header"])
     row += 1
     data_rows = 0
     write_number = worksheet.write_number
@@ -539,21 +674,15 @@ def _write_full_journal_region(
             item_no, source_row, annotation_index
         )
         col = 0
-        for value in record:
+        for header, value in zip(journal_header, record):
             if value is not None:
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    write_number(row, col, value, body_fmt)
+                shown = _display_journal_value(header, value)
+                if isinstance(shown, (int, float)) and not isinstance(shown, bool):
+                    write_number(row, col, shown, body_fmt)
                 else:
-                    write_string(row, col, str(value), body_fmt)
+                    write_string(row, col, str(shown), body_fmt)
             col += 1
-        for field in ANNOTATION_FIELDS:
-            value = annotation[field]
-            if value is not None and value != "":
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    write_number(row, col, value, body_fmt)
-                else:
-                    write_string(row, col, str(value), body_fmt)
-            col += 1
+        write_string(row, col, _row_relation_text(annotation), body_fmt)
         row += 1
         data_rows += 1
     return header_row, data_rows
@@ -583,15 +712,16 @@ def _write_full_journal_sheet(
     """写入完整全量序时账（原始全部列＋候选项目列），供人工复核。"""
     row = 0
     worksheet.write(
-        row, 0, "全量输入序时账（每行右侧标注进入了哪些项目的候选，供人工复核）",
+        row, 0, "全量输入序时账（每行右侧标注可能涉及的附表项目，供人工复核）",
         fmt["bold"],
     )
     row += 1
-    headers = list(journal_header) + ["候选项目"]
-    for col, header in enumerate(headers):
-        if header is None or header == "":
-            continue
-        worksheet.write(row, col, header, fmt["header"])
+    for col, header in enumerate(journal_header):
+        display = _display_header(header)
+        if display:
+            worksheet.write(row, col, display, fmt["header"])
+    candidate_col = len(journal_header)
+    worksheet.write(row, candidate_col, "可能涉及哪些附表项目", fmt["header"])
     header_row = row
     row += 1
     data_rows = 0
@@ -601,12 +731,13 @@ def _write_full_journal_sheet(
     for record_index, record in enumerate(journal_records):
         source_row = journal_header_row + record_index + 1
         col = 0
-        for value in record:
+        for header, value in zip(journal_header, record):
             if value is not None:
-                if isinstance(value, (int, float)) and not isinstance(value, bool):
-                    write_number(row, col, value, body_fmt)
+                shown = _display_journal_value(header, value)
+                if isinstance(shown, (int, float)) and not isinstance(shown, bool):
+                    write_number(row, col, shown, body_fmt)
                 else:
-                    write_string(row, col, str(value), body_fmt)
+                    write_string(row, col, str(shown), body_fmt)
             col += 1
         write_string(
             row,
@@ -617,6 +748,79 @@ def _write_full_journal_sheet(
         row += 1
         data_rows += 1
     return header_row, data_rows
+
+
+def _result_method(item_no: int, amount_minor: int, ai_amount_minor: int) -> str:
+    if int(ai_amount_minor) != 0:
+        return "AI判断后确定"
+    if int(amount_minor) == 0:
+        return "本期无此事项"
+    if int(item_no) in {13, 14, 15}:
+        return "按科目期初、期末余额计算"
+    return "逐笔账务计算"
+
+
+def _machine_reference_records(
+    decision_trace: pd.DataFrame,
+    details: pd.DataFrame,
+    item_summary: pd.DataFrame,
+) -> list[dict]:
+    """从判断轨迹摘取定位号和关联关系，不复制完整机器证据。"""
+    if decision_trace is None or decision_trace.empty:
+        return []
+    item_names = {
+        int(row["item_no"]): str(row["item_name"])
+        for _, row in item_summary.iterrows()
+    }
+    detail_by_fragment = {}
+    if details is not None and not details.empty and "fragment_id" in details:
+        detail_by_fragment = {
+            str(row["fragment_id"]): row
+            for _, row in details.iterrows()
+        }
+    records: list[dict] = []
+    for _, row in decision_trace.iterrows():
+        fragment_id = str(row.get("fragment_id", "") or "")
+        detail = detail_by_fragment.get(fragment_id)
+        item_no = int(row.get("item_no", 0))
+        records.append(
+            {
+                "项目号": item_no,
+                "项目名称": item_names.get(item_no, ""),
+                "原始行号": int(row.get("source_row", 0) or 0),
+                "凭证日期": "" if detail is None else str(detail.get("voucher_date", "") or ""),
+                "凭证号": "" if detail is None else str(detail.get("voucher_no", "") or ""),
+                "机器金额编号": fragment_id,
+                "机器业务编号": str(row.get("business_event_id", "") or ""),
+                "内部规则编号": str(row.get("rule_id", "") or ""),
+            }
+        )
+    return records
+
+
+def _write_machine_reference_sheet(
+    worksheet,
+    fmt: dict,
+    decision_trace: pd.DataFrame,
+    details: pd.DataFrame,
+    item_summary: pd.DataFrame,
+) -> None:
+    headers = [
+        "项目号", "项目名称", "原始行号", "凭证日期", "凭证号",
+        "机器金额编号", "机器业务编号", "内部规则编号",
+    ]
+    for col, header in enumerate(headers):
+        worksheet.write(0, col, header, fmt["header"])
+    records = _machine_reference_records(decision_trace, details, item_summary)
+    for row, record in enumerate(records, start=1):
+        for col, header in enumerate(headers):
+            value = record[header]
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                worksheet.write_number(row, col, value, fmt["body"])
+            else:
+                worksheet.write_string(row, col, str(value), fmt["body"])
+    worksheet.set_column(0, 7, 18)
+    worksheet.freeze_panes(1, 0)
 
 
 def write_audit_workbook(
@@ -632,6 +836,7 @@ def write_audit_workbook(
     journal_snapshot: Path,
     journal_sheet: str,
     journal_header_row: int,
+    account_labels: dict[str, str] | None = None,
 ) -> dict:
     """流式生成18张表审计底稿并做生成后结构校验。"""
     target = Path(target)
@@ -710,9 +915,9 @@ def write_audit_workbook(
 
     # ---- 附表结果表 ----
     result_headers = [
-        "项目名称", f"调节金额（{run_info['display_unit']}）",
-        "取数方式", "明细笔数", "AI判断金额", "人工升级金额",
-        "异常数量", "核对状态",
+        "项目", "金额",
+        "金额是怎么来的", "涉及笔数", "AI判断金额",
+        "需人工复核金额", "异常说明数量", "核对结果",
     ]
     for col, header in enumerate(result_headers):
         result_sheet.write(0, col, header, fmt["header"])
@@ -721,19 +926,25 @@ def write_audit_workbook(
     result_sheet.write_number(
         1, 1, int(net_profit["amount_minor"]) / divisor, fmt["money"]
     )
-    result_sheet.write(1, 2, "输入", fmt["body"])
+    result_sheet.write(1, 2, "客户确认的报表净利润", fmt["body"])
     result_sheet.write_number(1, 3, int(net_profit["detail_count"]), fmt["body"])
     result_sheet.write_number(1, 4, 0, fmt["money"])
     result_sheet.write_number(1, 5, 0, fmt["money"])
     result_sheet.write_number(1, 6, int(net_profit["issue_count"]), fmt["body"])
-    result_sheet.write(1, 7, str(net_profit["check_status"]), fmt["body"])
+    result_sheet.write(
+        1, 7, _RESULT_CHECK_STATUS_TEXT.get(
+            str(net_profit["check_status"]), str(net_profit["check_status"])
+        ), fmt["body"]
+    )
     row = 2
     for _, summary_row in item_summary.iterrows():
-        method = (
-            "AI判断" if int(summary_row["ai_amount_minor"]) != 0
-            else "规则或余额桥接"
+        item_no = int(summary_row["item_no"])
+        method = _result_method(
+            item_no,
+            int(summary_row["amount_minor"]),
+            int(summary_row["ai_amount_minor"]),
         )
-        sheet = item_sheets[int(summary_row["item_no"]) - 1]
+        sheet = item_sheets[item_no - 1]
         result_sheet.write_url(
             row,
             0,
@@ -758,7 +969,15 @@ def write_audit_workbook(
         result_sheet.write_number(
             row, 6, int(summary_row["issue_count"]), fmt["body"]
         )
-        result_sheet.write(row, 7, str(summary_row["check_status"]), fmt["body"])
+        result_sheet.write(
+            row,
+            7,
+            _RESULT_CHECK_STATUS_TEXT.get(
+                str(summary_row["check_status"]),
+                str(summary_row["check_status"]),
+            ),
+            fmt["body"],
+        )
         row += 1
     result_sheet.write(row, 0, "16项调节合计", fmt["bold"])
     result_sheet.write_number(
@@ -785,7 +1004,14 @@ def write_audit_workbook(
         )
     row += 1
     result_sheet.write(row, 0, "总对账状态", fmt["body"])
-    result_sheet.write(row, 1, reconciliation["status"], fmt["body"])
+    result_sheet.write(
+        row,
+        1,
+        _RECONCILIATION_STATUS_TEXT.get(
+            str(reconciliation["status"]), str(reconciliation["status"])
+        ),
+        fmt["body"],
+    )
     row += 1
     result_sheet.write(row, 0, "成果性质", fmt["body"])
     result_sheet.write(
@@ -795,6 +1021,7 @@ def write_audit_workbook(
     result_sheet.freeze_panes(1, 0)
 
     # ---- 16张项目底稿 ----
+    display_unit = str(run_info["display_unit"])
     for item_index, (_, summary_row) in enumerate(item_summary.iterrows()):
         item_no = int(summary_row["item_no"])
         item_name = str(summary_row["item_name"])
@@ -802,10 +1029,10 @@ def write_audit_workbook(
         sheet = workbook.add_worksheet(item_sheets[item_index])
         next_row = _item_top_area(
             sheet, fmt, item_no, item_name, frozen_amount, divisor,
-            bridges, issues,
+            bridges, issues, display_unit, account_labels,
         )
         next_row = _write_item_detail_region(
-            sheet, fmt, next_row, item_no, details, divisor,
+            sheet, fmt, next_row, item_no, details, divisor, display_unit,
         )
         header_row, data_rows = _write_full_journal_region(
             sheet,
@@ -819,7 +1046,7 @@ def write_audit_workbook(
             relevant_rows_by_item.get(item_no, set()),
         )
         sheet.freeze_panes(header_row + 1, 3)
-        total_cols = len(journal_header) + len(ANNOTATION_FIELDS)
+        total_cols = len(journal_header) + 1
         sheet.autofilter(
             header_row,
             0,
@@ -830,19 +1057,28 @@ def write_audit_workbook(
         sheet.set_landscape()
         sheet.set_paper(9)
 
+    machine_sheet = workbook.add_worksheet(MACHINE_REFERENCE_SHEET)
+    _write_machine_reference_sheet(
+        machine_sheet, fmt, decision_trace, details, item_summary
+    )
+
     workbook.close()
 
+    expected_sheets = (
+        [_RESULT_SHEET, _FULL_JOURNAL_SHEET] + item_sheets
+        + [MACHINE_REFERENCE_SHEET]
+    )
     validation = validate_workbook_structure(
         target=target,
-        expected_sheets=[_RESULT_SHEET, _FULL_JOURNAL_SHEET] + item_sheets,
+        expected_sheets=expected_sheets,
         item_sheets=item_sheets,
         journal_line_count=journal_line_count,
         journal_header_row=journal_header_row,
     )
     return {
-        "sheets": [_RESULT_SHEET, _FULL_JOURNAL_SHEET] + item_sheets,
+        "sheets": expected_sheets,
         "journal_row_count": journal_line_count,
-        "journal_column_count": len(journal_header) + len(ANNOTATION_FIELDS),
+        "journal_column_count": len(journal_header) + 1,
         "link_count": 32,
         "formula_error_count": validation["formula_error_count"],
         "path": str(target),
@@ -905,7 +1141,7 @@ def validate_workbook_structure(
                         raise WorkbookStructureError(
                             f"结果表链接目标无效：{location}"
                         )
-                else:
+                elif sheet_names[index - 1] in item_sheets:
                     back_links += 1
                     if location != back_target:
                         raise WorkbookStructureError(
@@ -996,8 +1232,9 @@ def write_rapid_workbook(
     journal_snapshot: Path,
     journal_sheet: str,
     journal_header_row: int,
+    account_labels: dict[str, str] | None = None,
 ) -> dict:
-    """急速模式 xlsx：只输出“附表结果”和“简报”两个工作表。"""
+    """急速模式 xlsx：输出结果表、简报和机器用复核数据三张表。"""
     target = Path(target)
     divisor = int(run_info["display_divisor_minor"])
     completion_status_label = run_info.get(
@@ -1017,9 +1254,8 @@ def write_rapid_workbook(
     result_sheet = workbook.add_worksheet(_RESULT_SHEET)
 
     result_headers = [
-        "项目名称", f"调节金额（{run_info['display_unit']}）",
-        "取数方式", "明细笔数", "AI判断金额", "人工升级金额",
-        "异常数量", "核对状态",
+        "项目", "金额", "金额是怎么来的", "涉及笔数", "AI判断金额",
+        "需人工复核金额", "异常说明数量", "核对结果",
     ]
     for col, header in enumerate(result_headers):
         result_sheet.write(0, col, header, fmt["header"])
@@ -1028,17 +1264,23 @@ def write_rapid_workbook(
     result_sheet.write_number(
         1, 1, int(net_profit["amount_minor"]) / divisor, fmt["money"]
     )
-    result_sheet.write(1, 2, "输入", fmt["body"])
+    result_sheet.write(1, 2, "客户确认的报表净利润", fmt["body"])
     result_sheet.write_number(1, 3, int(net_profit["detail_count"]), fmt["body"])
     result_sheet.write_number(1, 4, 0, fmt["money"])
     result_sheet.write_number(1, 5, 0, fmt["money"])
     result_sheet.write_number(1, 6, int(net_profit["issue_count"]), fmt["body"])
-    result_sheet.write(1, 7, str(net_profit["check_status"]), fmt["body"])
+    result_sheet.write(
+        1, 7, _RESULT_CHECK_STATUS_TEXT.get(
+            str(net_profit["check_status"]), str(net_profit["check_status"])
+        ), fmt["body"]
+    )
     row = 2
     for _, summary_row in item_summary.iterrows():
-        method = (
-            "AI判断" if int(summary_row["ai_amount_minor"]) != 0
-            else "规则或余额桥接"
+        item_no = int(summary_row["item_no"])
+        method = _result_method(
+            item_no,
+            int(summary_row["amount_minor"]),
+            int(summary_row["ai_amount_minor"]),
         )
         result_sheet.write(row, 0, str(summary_row["item_name"]), fmt["body"])
         result_sheet.write_number(
@@ -1058,7 +1300,15 @@ def write_rapid_workbook(
         result_sheet.write_number(
             row, 6, int(summary_row["issue_count"]), fmt["body"]
         )
-        result_sheet.write(row, 7, str(summary_row["check_status"]), fmt["body"])
+        result_sheet.write(
+            row,
+            7,
+            _RESULT_CHECK_STATUS_TEXT.get(
+                str(summary_row["check_status"]),
+                str(summary_row["check_status"]),
+            ),
+            fmt["body"],
+        )
         row += 1
     result_sheet.write(row, 0, "16项调节合计", fmt["bold"])
     result_sheet.write_number(
@@ -1085,7 +1335,14 @@ def write_rapid_workbook(
         )
     row += 1
     result_sheet.write(row, 0, "总对账状态", fmt["body"])
-    result_sheet.write(row, 1, reconciliation["status"], fmt["body"])
+    result_sheet.write(
+        row,
+        1,
+        _RECONCILIATION_STATUS_TEXT.get(
+            str(reconciliation["status"]), str(reconciliation["status"])
+        ),
+        fmt["body"],
+    )
     row += 1
     result_sheet.write(row, 0, "成果性质", fmt["body"])
     result_sheet.write(
@@ -1108,9 +1365,9 @@ def write_rapid_workbook(
         ["16项调节合计", int(reconciliation["adjustments_minor"]) / divisor],
         ["间接法经营活动现金流量净额", int(reconciliation["indirect_cfo_minor"]) / divisor],
         ["直接法与间接法差异", None if reconciliation["difference_minor"] is None else int(reconciliation["difference_minor"]) / divisor],
-        ["总对账状态", reconciliation["status"]],
+        ["总对账状态", _RECONCILIATION_STATUS_TEXT.get(str(reconciliation["status"]), str(reconciliation["status"]))],
         ["成果性质", completion_status_label],
-        ["输出模式", "急速模式：2个工作表xlsx＋16个同名MD底稿"],
+        ["输出模式", "急速模式：3个工作表xlsx＋16个同名MD底稿"],
         ["MD底稿说明", "16个项目底稿以同名Markdown文件输出，见输出目录下的“底稿MD”文件夹"],
     ]
     for index, (label, value) in enumerate(brief_rows, start=0):
@@ -1121,8 +1378,13 @@ def write_rapid_workbook(
             brief_sheet.write(index, 1, value, fmt["body"])
     brief_sheet.set_column(0, 1, 40)
 
+    machine_sheet = workbook.add_worksheet(MACHINE_REFERENCE_SHEET)
+    _write_machine_reference_sheet(
+        machine_sheet, fmt, decision_trace, details, item_summary
+    )
+
     workbook.close()
-    return {"path": str(target), "sheets": [_RESULT_SHEET, "简报"]}
+    return {"path": str(target), "sheets": [_RESULT_SHEET, "简报", MACHINE_REFERENCE_SHEET]}
 
 
 def _md_escape(text: str) -> str:
@@ -1146,6 +1408,7 @@ def write_item_markdowns(
     journal_sheet: str,
     journal_header_row: int,
     run_info: dict,
+    account_labels: dict[str, str] | None = None,
 ) -> dict:
     """急速模式：为16个项目各写一个同名Markdown审计底稿。"""
     output_dir = Path(output_dir)
@@ -1190,80 +1453,79 @@ def write_item_markdowns(
         path = output_dir / filename
 
         lines = [f"# {_sheet_name(item_no, item_name)} 审计底稿", ""]
-        lines.append(f"- 项目冻结金额：{frozen / divisor:.2f} {run_info['display_unit']}")
-        lines.append(f"- 明细笔数：{int(summary_row['detail_count'])}")
-        lines.append(f"- 取数方式：{'AI判断' if int(summary_row['ai_amount_minor']) else '规则或余额桥接'}")
-        lines.append(f"- 核对状态：{summary_row['check_status']}")
+        lines.append(f"- 本项目最终金额：{frozen / divisor:.2f} {run_info['display_unit']}")
+        lines.append(f"- 涉及笔数：{int(summary_row['detail_count'])}")
+        lines.append(f"- 金额是怎么来的：{_result_method(item_no, int(summary_row['amount_minor']), int(summary_row['ai_amount_minor']))}")
+        lines.append(f"- 核对结果：{_RESULT_CHECK_STATUS_TEXT.get(str(summary_row['check_status']), str(summary_row['check_status']))}")
         lines.append("")
 
         item_bridges = _frame_items(bridges, item_no)
-        lines.append("## 余额桥接")
+        lines.append("## 从科目余额表怎么算出本项目")
         if item_bridges.empty:
-            lines.append("不适用")
+            lines.append("本项目不用科目余额表计算")
         else:
-            lines.append("| 来源维度 | 期初余额 | 期末余额 | 修正金额 | 最终金额 | 桥接说明 |")
+            lines.append("| 取数来源 | 期初余额 | 期末余额 | 需要剔除的金额 | 计入本项目金额 | 一句话说明 |")
             lines.append("|---|---|---|---|---|---|")
             for _, bridge in item_bridges.iterrows():
                 lines.append(
                     "| {} | {:.2f} | {:.2f} | {:.2f} | {:.2f} | {} |".format(
-                        _md_escape(bridge.get("source_kind", "") or ""),
+                        _md_escape(_bridge_source_text(bridge, account_labels)),
                         float(bridge.get("opening_minor", 0) or 0) / divisor,
                         float(bridge.get("closing_minor", 0) or 0) / divisor,
                         float(bridge.get("corrections_minor", 0) or 0) / divisor,
                         float(bridge.get("final_amount_minor", 0) or 0) / divisor,
-                        _md_escape(bridge.get("reason", "") or ""),
+                        _md_escape(_bridge_reason_text(item_no, bridge)),
                     )
                 )
         lines.append("")
 
         item_issues = _frame_items(issues, item_no)
-        lines.append("## 本项目异常")
+        lines.append("## 需要留意的异常情况")
         if item_issues.empty:
-            lines.append("无")
+            lines.append("没有发现异常")
         else:
-            lines.append("| 异常类型 | 金额 | 事实描述 | AI建议 | 最终采用处理 |")
+            lines.append("| 异常类型 | 金额 | 事实描述 | AI建议 | 最终怎么处理 |")
             lines.append("|---|---|---|---|---|")
             for _, issue in item_issues.iterrows():
+                final = issue.get("final_decision", "") or ""
                 lines.append(
                     "| {} | {:.2f} | {} | {} | {} |".format(
                         _md_escape(issue.get("issue_code", "") or ""),
                         float(issue.get("amount_minor", 0) or 0) / divisor,
                         _md_escape(issue.get("reason", "") or ""),
                         _md_escape(issue.get("recommendation", "") or ""),
-                        _md_escape(issue.get("final_decision", "") or ""),
+                        _md_escape(_FINAL_DECISION_TEXT.get(str(final), str(final))),
                     )
                 )
         lines.append("")
 
         item_details = _frame_items(details, item_no)
-        lines.append("## 本项目判断明细")
+        lines.append("## 逐笔计算明细")
         if item_details.empty:
-            lines.append("无明细")
+            lines.append("没有逐笔明细")
         else:
-            lines.append("| 金额片段标识 | 业务事件标识 | 凭证日期 | 凭证号 | 摘要 | 原始金额 | 纳入金额 | 处理结论 | 规则编号 | 纳入或排除理由 |")
-            lines.append("|---|---|---|---|---|---|---|---|---|---|")
+            lines.append("| 凭证日期 | 凭证号 | 摘要 | 原始金额 | 计入本项目金额 | 处理结果 | 取数口径 | 为什么这样处理 |")
+            lines.append("|---|---|---|---|---|---|---|---|")
             for _, detail in item_details.iterrows():
+                decision = detail.get("decision", "") or ""
+                rule_id = detail.get("rule_id", "") or ""
                 lines.append(
-                    "| {} | {} | {} | {} | {} | {:.2f} | {:.2f} | {} | {} | {} |".format(
-                        _md_escape(detail.get("fragment_id", "") or ""),
-                        _md_escape(detail.get("business_event_id", "") or ""),
+                    "| {} | {} | {} | {:.2f} | {:.2f} | {} | {} | {} |".format(
                         _md_escape(detail.get("voucher_date", "") or ""),
                         _md_escape(detail.get("voucher_no", "") or ""),
                         _md_escape(detail.get("summary", "") or ""),
                         float(detail.get("source_amount_minor", 0) or 0) / divisor,
                         float(detail.get("adjustment_amount_minor", 0) or 0) / divisor,
-                        _md_escape(detail.get("decision", "") or ""),
-                        _md_escape(detail.get("rule_id", "") or ""),
-                        _md_escape(detail.get("reason", "") or ""),
+                        _md_escape(_FINAL_DECISION_TEXT.get(str(decision), str(decision))),
+                        _md_escape(_RULE_DISPLAY_TEXT.get(str(rule_id), "按已确认规则处理")),
+                        _md_escape(_detail_reason(item_no, detail)),
                     )
                 )
         lines.append("")
 
-        lines.append("## 本项目候选行（逐行注释）")
-        lines.append(
-            "| 原始行 | 业务说明 | 科目名称 | 借方发生额 | 贷方发生额 | 项目筛选状态 | 规则编号 | 最终判断 | 本项目调节金额 | 规则判断理由 | 是否人工智能判断 | AI建议 | 支持证据 | 相反证据 | 置信度 | 是否人工升级 |"
-        )
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("## 本项目相关的凭证行")
+        lines.append("| 原始行号 | 凭证日期 | 凭证号 | 摘要 | 科目名称 | 借方发生额 | 贷方发生额 | 本行和本项目的关系 |")
+        lines.append("|---|---|---|---|---|---|---|---|")
         hit_count = 0
         relevant = relevant_rows_by_item.get(item_no, set())
         for index, record in enumerate(journal_records):
@@ -1273,35 +1535,33 @@ def write_item_markdowns(
             annotation = annotation_for_row(item_no, source_row, annotation_index)
             hit_count += 1
             record_map = {
-                header_names[col]: value
-                for col, value in enumerate(record)
+                str(header or ""): value
+                for header, value in zip(journal_header, record)
             }
+            voucher_date = (
+                record_map.get("记账时间", "")
+                or record_map.get("会计月", "")
+                or ""
+            )
+            summary = record_map.get("业务说明", "") or record_map.get("摘要", "")
             lines.append(
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+                "| {} | {} | {} | {} | {} | {} | {} | {} |".format(
                     source_row,
-                    _md_escape(record_map.get("业务说明", "") or ""),
+                    _md_escape(voucher_date or ""),
+                    _md_escape(record_map.get("凭证编号", "") or ""),
+                    _md_escape(summary or ""),
                     _md_escape(record_map.get("科目名称", "") or ""),
                     _md_escape(record_map.get("借方发生额", "") or ""),
                     _md_escape(record_map.get("贷方发生额", "") or ""),
-                    _md_escape(annotation["项目筛选状态"]),
-                    _md_escape(annotation["规则编号"]),
-                    _md_escape(annotation["最终判断"]),
-                    annotation["本项目调节金额"],
-                    _md_escape(annotation["规则判断理由"]),
-                    _md_escape(annotation["是否人工智能判断"]),
-                    _md_escape(annotation["人工智能建议"]),
-                    _md_escape(annotation["支持证据"]),
-                    _md_escape(annotation["相反证据"]),
-                    _md_escape(annotation["置信度"]),
-                    _md_escape(annotation["是否人工升级"]),
+                    _md_escape(_row_relation_text(annotation)),
                 )
             )
         lines.append("")
         unmatched = len(journal_records) - hit_count
-        lines.append("## 未命中说明")
+        lines.append("## 其余凭证行说明")
         lines.append(
-            f"序时账共 {len(journal_records)} 行，本项目候选 {hit_count} 行，"
-            f"未命中 {unmatched} 行。未命中行不在此展开。"
+            f"序时账共 {len(journal_records)} 行，本项目涉及 {hit_count} 行，"
+            f"其余 {unmatched} 行不在此展开。"
         )
         lines.append("")
 

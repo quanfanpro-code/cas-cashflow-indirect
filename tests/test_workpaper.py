@@ -1,4 +1,4 @@
-"""项目索引与逐行注释测试。"""
+﻿"""项目索引与逐行注释测试。"""
 
 from importlib import import_module
 
@@ -15,7 +15,7 @@ def test_annotation_keeps_unmatched_journal_row():
         pd.DataFrame(columns=list(TRACE_COLUMNS))
     )
     annotation = workpaper.annotation_for_row(3, 88, index)
-    assert annotation["项目筛选状态"] == "本项目未命中"
+    assert annotation["项目筛选状态"] == "不属于本项目"
     assert annotation["本项目调节金额"] == 0
     assert annotation["防重复核对结论"] == "不适用"
 
@@ -87,7 +87,7 @@ def test_annotation_aggregates_multiple_fragments_of_one_row():
     index = workpaper.build_item_trace_index(trace)
     annotation = workpaper.annotation_for_row(3, 88, index)
 
-    assert annotation["项目筛选状态"] == "命中"
+    assert annotation["项目筛选状态"] == "属于本项目"
     assert annotation["本项目调节金额"] == 25000
     assert "frag-a" in annotation["金额片段标识"]
     assert "frag-b" in annotation["金额片段标识"]
@@ -117,10 +117,10 @@ def test_annotation_keeps_items_isolated_for_same_row():
     item1 = workpaper.annotation_for_row(1, 88, index)
     item2 = workpaper.annotation_for_row(2, 88, index)
 
-    assert item1["项目筛选状态"] == "命中"
+    assert item1["项目筛选状态"] == "属于本项目"
     assert "资产减值计入第1项" in item1["规则判断理由"]
     assert item1["本项目调节金额"] == 20000
-    assert item2["项目筛选状态"] == "本项目未命中"
+    assert item2["项目筛选状态"] == "不属于本项目"
     assert item2["本项目调节金额"] == 0
     assert item2["金额片段标识"] == ""
     assert "资产减值计入第1项" not in item2["规则判断理由"]
@@ -138,7 +138,7 @@ def _write_journal_snapshot(path: Path) -> None:
     worksheet = workbook.active
     worksheet.title = "序时账"
     header = [
-        "",
+        "Unnamed: 0",
         "记账时间",
         "会计月",
         "凭证种类",
@@ -333,7 +333,7 @@ def test_workbook_has_result_and_sixteen_item_sheets(
 ):
     result = workpaper.write_audit_workbook(**workpaper_input)
     workbook = openpyxl.load_workbook(result["path"], read_only=False)
-    assert workbook.sheetnames == expected_17_sheets
+    assert workbook.sheetnames == expected_17_sheets + [workpaper.MACHINE_REFERENCE_SHEET]
 
 
 
@@ -396,7 +396,7 @@ def test_every_item_sheet_keeps_only_its_relevant_journal_rows(
             for row_index, row in enumerate(sheet.iter_rows(), start=1):
                 if (
                     row[0].value
-                    and "相关序时账" in str(row[0].value)
+                    and "相关的凭证行" in str(row[0].value)
                 ):
                     title_row = row_index
                     break
@@ -406,12 +406,11 @@ def test_every_item_sheet_keeps_only_its_relevant_journal_rows(
                 cell.value
                 for cell in sheet[header_row_index]
             ]
-            # 空标题仍占据原列位置
-            assert headers[0] is None or headers[0] == ""
+            assert headers[0] == "原始行号"
             assert headers[1] == "记账时间"
             assert "核算维度" in headers
             assert "部门" in headers
-            assert "项目筛选状态" in headers
+            assert "本行和本项目的关系" in headers
             data_rows = []
             for row in sheet.iter_rows(
                 min_row=header_row_index + 1,
@@ -427,9 +426,9 @@ def test_every_item_sheet_keeps_only_its_relevant_journal_rows(
                 assert any(
                     row[dimension_col - 1] == "存货" for row in data_rows
                 )
-                status_col = headers.index("项目筛选状态") + 1
+                status_col = headers.index("本行和本项目的关系") + 1
                 assert any(
-                    row[status_col - 1] == "命中" for row in data_rows
+                    row[status_col - 1] == "本行算进本项目，影响经营活动现金流" for row in data_rows
                 )
             else:
                 assert len(data_rows) == 0, (
@@ -475,7 +474,7 @@ def test_result_amounts_formulas_and_zero_item_sheets(
             total_formulas = [
                 (coord, value)
                 for coord, value in formulas
-                if "SUM(G" in value
+                if "SUM(F" in value
             ]
             assert len(total_formulas) == 1, f"{sheet_name}缺少明细合计公式"
             diff_formulas = [
@@ -490,7 +489,7 @@ def test_result_amounts_formulas_and_zero_item_sheets(
         title_rows = [
             row[0].value
             for row in zero_sheet.iter_rows()
-            if row[0].value and "相关序时账" in str(row[0].value)
+            if row[0].value and "相关的凭证行" in str(row[0].value)
         ]
         assert len(title_rows) == 1
         # 打开时自动重算
@@ -532,8 +531,219 @@ def test_workbook_structure_validation_rejects_invalid_links(
     with pytest.raises(workpaper.WorkbookStructureError, match="链接目标无效"):
         workpaper.validate_workbook_structure(
             target=broken_path,
-            expected_sheets=expected_17_sheets,
+            expected_sheets=expected_17_sheets + [workpaper.MACHINE_REFERENCE_SHEET],
             item_sheets=expected_17_sheets[2:],
             journal_line_count=3,
             journal_header_row=1,
         )
+
+FORBIDDEN_DISPLAY_TERMS = {
+    "金额片段标识",
+    "业务事件标识",
+    "规则编号",
+    "余额桥接",
+    "项目冻结金额",
+    "included",
+    "exclusive",
+    "account",
+    "pass",
+    "匹配类型",
+    "取数方式",
+    "处理结论",
+    "纳入金额",
+    "working-capital-item",
+}
+
+FOUR_HUMAN_RESULTS = {
+    "算进本项目，影响经营活动现金流",
+    "不算进本项目，不影响经营活动现金流",
+    "改归其他项目，本项目不算，由其他项目算",
+    "按准则需在两个项目同时反映，不是重复计算",
+}
+
+
+def test_standard_workbook_has_machine_reference_sheet_at_end(
+    workpaper_input,
+    expected_17_sheets,
+):
+    result = workpaper.write_audit_workbook(**workpaper_input)
+    workbook = openpyxl.load_workbook(result["path"], read_only=False)
+    try:
+        expected = expected_17_sheets + ["机器用复核数据"]
+        assert workbook.sheetnames == expected
+        sheet = workbook["机器用复核数据"]
+        assert sheet["A1"].value == "项目号"
+        assert sheet["B1"].value == "项目名称"
+        assert sheet["H1"].value == "内部规则编号"
+    finally:
+        workbook.close()
+
+
+def test_result_sheet_uses_human_friendly_headers(
+    workpaper_input,
+):
+    result = workpaper.write_audit_workbook(**workpaper_input)
+    workbook = openpyxl.load_workbook(result["path"], read_only=False)
+    try:
+        headers = [
+            workbook["附表结果"].cell(1, col).value
+            for col in range(1, 9)
+        ]
+        assert headers == [
+            "项目",
+            "金额",
+            "金额是怎么来的",
+            "涉及笔数",
+            "AI判断金额",
+            "需人工复核金额",
+            "异常说明数量",
+            "核对结果",
+        ]
+    finally:
+        workbook.close()
+
+
+def test_regular_sheets_do_not_show_machine_terms(
+    workpaper_input,
+    expected_17_sheets,
+):
+    result = workpaper.write_audit_workbook(**workpaper_input)
+    workbook = openpyxl.load_workbook(result["path"], read_only=False)
+    try:
+        for sheet_name in expected_17_sheets:
+            sheet = workbook[sheet_name]
+            for row in sheet.iter_rows():
+                for cell in row:
+                    if isinstance(cell.value, str):
+                        assert cell.value not in FORBIDDEN_DISPLAY_TERMS, (
+                            f"{sheet_name}!{cell.coordinate} 出现机器词：{cell.value}"
+                        )
+    finally:
+        workbook.close()
+
+
+def test_detail_region_uses_eight_human_columns(
+    workpaper_input,
+    expected_17_sheets,
+):
+    result = workpaper.write_audit_workbook(**workpaper_input)
+    workbook = openpyxl.load_workbook(result["path"], read_only=False)
+    try:
+        sheet = workbook["01资产减值准备"]
+        header_row = None
+        for row in sheet.iter_rows():
+            if row[0].value == "逐笔计算明细":
+                header_row = row[0].row
+                break
+        assert header_row is not None
+        headers = [
+            sheet.cell(header_row + 1, col).value for col in range(1, 9)
+        ]
+        assert headers == [
+            "凭证日期",
+            "凭证号",
+            "摘要",
+            "原始金额",
+            "计入本项目金额",
+            "处理结果",
+            "取数口径",
+            "为什么这样处理",
+        ]
+        assert sheet.cell(header_row + 1, 9).value is None
+        total_row = None
+        for r in range(header_row + 2, sheet.max_row + 1):
+            if sheet.cell(r, 5).value == "明细合计":
+                total_row = r
+                break
+        assert total_row is not None
+        results = {
+            sheet.cell(r, 6).value
+            for r in range(header_row + 2, total_row)
+            if sheet.cell(r, 6).value
+        }
+        assert results <= FOUR_HUMAN_RESULTS
+    finally:
+        workbook.close()
+
+
+def test_machine_reference_sheet_has_location_columns(
+    workpaper_input,
+):
+    result = workpaper.write_audit_workbook(**workpaper_input)
+    workbook = openpyxl.load_workbook(result["path"], read_only=False)
+    try:
+        sheet = workbook["机器用复核数据"]
+        assert sheet["A1"].value == "项目号"
+        assert sheet["B1"].value == "项目名称"
+        assert sheet["C1"].value == "原始行号"
+        assert sheet["D1"].value == "凭证日期"
+        assert sheet["E1"].value == "凭证号"
+        assert sheet["F1"].value == "机器金额编号"
+        assert sheet["G1"].value == "机器业务编号"
+        assert sheet["H1"].value == "内部规则编号"
+        data = [
+            row
+            for row in sheet.iter_rows(min_row=2, values_only=True)
+            if any(value is not None and str(value) != "" for value in row)
+        ]
+        assert len(data) == 1
+        assert data[0][0] == 1
+        assert data[0][5] == "f-1"
+    finally:
+        workbook.close()
+
+
+def test_bridge_source_uses_account_labels(
+    workpaper_input,
+):
+    inputs = dict(workpaper_input)
+    bridges = pd.DataFrame(
+        [
+            {
+                "item_no": 14,
+                "record_type": "included",
+                "source_kind": "account",
+                "account_code": "112202",
+                "opening_minor": 100000,
+                "closing_minor": 50000,
+                "corrections_minor": 0,
+                "final_amount_minor": 50000,
+                "reason_code": "OPERATING_BALANCE_INCLUDED",
+                "reason": "经营性余额变动",
+            }
+        ]
+    )
+    inputs["bridges"] = bridges
+    result = workpaper.write_audit_workbook(
+        **inputs,
+        account_labels={"112202": "应收账款/集团外"},
+    )
+    workbook = openpyxl.load_workbook(result["path"], read_only=False)
+    try:
+        sheet = workbook["14经营性应收项目减少"]
+        values = {
+            str(cell.value)
+            for row in sheet.iter_rows()
+            for cell in row
+            if cell.value
+        }
+        assert "科目余额表：112202 应收账款/集团外" in values
+        assert "取数来源" in values
+        assert "一句话说明" in values
+    finally:
+        workbook.close()
+
+
+def test_full_journal_sheet_uses_human_headers(workpaper_input):
+    result = workpaper.write_audit_workbook(**workpaper_input)
+    workbook = openpyxl.load_workbook(result["path"], read_only=False)
+    try:
+        sheet = workbook["全量序时账"]
+        headers = [cell.value for cell in sheet[2]]
+        assert "对方科目是怎么匹配出来的" in headers
+        assert "原始行号" in headers
+        assert "可能涉及哪些附表项目" in headers
+        assert "匹配类型" not in headers
+        assert "Unnamed: 0" not in headers
+    finally:
+        workbook.close()

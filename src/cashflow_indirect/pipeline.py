@@ -1,4 +1,4 @@
-"""准备、AI停点、定稿、核对和输出的流水线。"""
+﻿"""准备、AI停点、定稿、核对和输出的流水线。"""
 
 from dataclasses import asdict
 import hashlib
@@ -1823,6 +1823,10 @@ def finalize_run(
         "rule_version": state["rule_version"],
         "code_version": state["code_version"],
     }
+    account_labels = {
+        str(row["account_code"]): str(row["account_name"])
+        for _, row in trial_balance.iterrows()
+    }
     export_results(
         run_store=store,
         summary=summary,
@@ -1838,6 +1842,7 @@ def finalize_run(
         journal_sheet=state["journal_sheet"],
         journal_header_row=int(state["journal_header_row"]),
         output_mode=str(state.get("output_mode", "standard")),
+        account_labels=account_labels,
     )
     state["status"] = final_status
     state["file_status"] = file_status

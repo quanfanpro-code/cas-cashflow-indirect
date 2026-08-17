@@ -1,4 +1,4 @@
----
+﻿---
 name: cas-cashflow-indirect
 description: Use when the user needs to prepare, resume, inspect, or explain a Chinese Accounting Standards cash flow statement supplementary schedule using the indirect method from a standardized journal and trial balance, including 现金流量表附表、净利润调节、序时账、标准模式、急速模式、续跑、人工升级、Excel、AI分类、余额桥接或直接法总对账。
 ---
@@ -41,8 +41,8 @@ description: Use when the user needs to prepare, resume, inspect, or explain a C
    - AI留痕：`references\协议\现金流量表附表间接法_JSONL计算留痕协议.md`
    - 输出解释：`references\协议\现金流量表附表间接法_正式输出协议.md`
 6. **🔴 CHECKPOINT 输出模式询问（必做）**：正式输出前，必须向客户说明两种输出模式并让客户选择：
-   - **标准模式**：1张结果表＋1张全量序时账＋16张项目底稿共18张工作表，便于逐行核查，但生成较慢；
-   - **急速模式**：xlsx只含“附表结果＋简报”2个工作表，16个项目底稿以同名Markdown文件输出，生成极快（秒级），适合快速查看结果，逐行核查不如标准模式直观。
+   - **标准模式**：1张结果总表＋1张全量序时账＋16张项目底稿＋1张“机器用复核数据”，普通人只看前18张，便于逐行核查，但生成较慢；
+   - **急速模式**：xlsx含“附表结果＋简报＋机器用复核数据”3个工作表，16个项目底稿以同名Markdown文件输出，生成极快（秒级），适合快速查看结果，逐行核查不如标准模式直观。
    客户选择后，把模式写入配置（`output_mode`取`standard`或`rapid`）。客户未明确选择时不得擅自决定。
 7. 在本次工作目录生成UTF-8 with BOM配置JSON。固定使用：
    - `rules_path`：技能根目录下`rules\cas_general_v1.json`
@@ -124,7 +124,7 @@ python -X utf8 "<技能根目录>\scripts\engine_launcher.py" status --run-dir <
 4. AI判断数量和人工升级数量；
 5. 若阻断，只给一个最优先的下一动作。
 
-正式工作簿固定为18张可见工作表：1张“附表结果”＋1张“全量序时账”＋16张项目底稿（`01资产减值准备`至`16其他明确调整`）。每张项目底稿只展示本项目候选行（命中、排除、改归）并逐行注释，顶部统计未命中数量；“全量序时账”表完整保存输入序时账全部行并标注每行的候选项目，供人工复核相关行完整性。结果表与项目底稿之间有32个双向内部链接（16进入＋16返回）。判断理由、AI建议、正反证据和金额占用统一保存在`decision_trace.parquet`；最终运行事件和查询索引分别保存在`events.jsonl`与`event_index.parquet`，三者均进入正式输出清单并记录哈希。
+正式工作簿固定为19张可见工作表：1张“附表结果”＋1张“全量序时账”＋16张项目底稿（`01资产减值准备`至`16其他明确调整`）＋1张“机器用复核数据”。普通工作表只使用正常汉语，写明每笔金额是什么、怎么处理、为什么这样处理；机器编号和内部金额只放在“机器用复核数据”表，供倒查完整机器证据。结果表与项目底稿之间有32个双向内部链接（16进入＋16返回）。完整机器证据继续保存在`decision_trace.parquet`等机器文件中。
 
 正式输出结构和判断轨迹字段见`references\协议\现金流量表附表间接法_正式输出协议.md`与`references\协议\现金流量表附表间接法_JSONL计算留痕协议.md`；16项规则口径见`references\业务规则`目录和`rules\cas_general_v1.json`，以技能根目录为准，不得依赖桌面旧项目。
 
