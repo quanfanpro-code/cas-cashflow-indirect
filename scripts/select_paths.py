@@ -1,4 +1,4 @@
-﻿"""使用Windows选择窗口取得现金流量表运行路径。"""
+"""使用Windows选择窗口取得现金流量表运行路径。"""
 
 import argparse
 import json
@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 
 
-MODES = ["prepare", "run-dir", "ai-decisions"]
+MODES = ["journal", "balance", "run-dir", "ai-decisions"]
 
 
 def _emit(payload: dict) -> None:
@@ -37,39 +37,28 @@ def _dialog_root():
     return root
 
 
-def _select_prepare() -> dict:
+def _select_single_file(kind: str) -> dict:
     from tkinter import filedialog
+
+    if kind == "journal":
+        title = "选择经序时账分析器处理的标准序时账Excel"
+        field = "journal_path"
+    else:
+        title = "选择科目余额表Excel"
+        field = "trial_balance_path"
 
     root = _dialog_root()
     try:
-        journal = filedialog.askopenfilename(
+        path = filedialog.askopenfilename(
             parent=root,
-            title="选择经序时账分析器处理的标准序时账Excel",
+            title=title,
             filetypes=[("Excel文件", "*.xlsx *.xlsm")],
         )
-        if not journal:
-            return _cancelled("journal_path")
-        balance = filedialog.askopenfilename(
-            parent=root,
-            title="选择科目余额表Excel",
-            initialdir=str(Path(journal).parent),
-            filetypes=[("Excel文件", "*.xlsx *.xlsm")],
+        return (
+            {"status": "selected", field: path}
+            if path
+            else _cancelled(field)
         )
-        if not balance:
-            return _cancelled("trial_balance_path")
-        output_root = filedialog.askdirectory(
-            parent=root,
-            title="选择运行结果保存目录",
-            initialdir=str(Path(journal).parent),
-        )
-        if not output_root:
-            return _cancelled("output_root")
-        return {
-            "status": "selected",
-            "journal_path": journal,
-            "trial_balance_path": balance,
-            "output_root": output_root,
-        }
     finally:
         root.destroy()
 
@@ -117,14 +106,14 @@ def main() -> None:
         return
     if os.name != "nt":
         raise RuntimeError("路径选择器仅支持Windows")
-    if args.mode == "prepare":
-        result = _select_prepare()
+    if args.mode in ("journal", "balance"):
+        result = _select_single_file(args.mode)
     elif args.mode == "run-dir":
         result = _select_run_dir()
     elif args.mode == "ai-decisions":
         result = _select_ai_decisions()
     else:
-        parser.error("必须指定prepare、run-dir或ai-decisions")
+        parser.error("必须指定journal、balance、run-dir或ai-decisions")
         return
     _emit(result)
 

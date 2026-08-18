@@ -1,4 +1,4 @@
-﻿import json
+import json
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -62,12 +62,12 @@ def test_windows_path_selector_has_noninteractive_self_check():
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
         "status": "ok",
-        "modes": ["prepare", "run-dir", "ai-decisions"],
+        "modes": ["journal", "balance", "run-dir", "ai-decisions"],
         "platform": "Windows",
     }
 
 
-def test_prepare_selector_explicitly_requests_analyzed_journal(monkeypatch):
+def test_journal_selector_explicitly_requests_analyzed_journal(monkeypatch):
     script_path = SKILL_ROOT / "scripts" / "select_paths.py"
     spec = importlib.util.spec_from_file_location("select_paths", script_path)
     assert spec is not None and spec.loader is not None
@@ -81,22 +81,15 @@ def test_prepare_selector_explicitly_requests_analyzed_journal(monkeypatch):
 
     def askopenfilename(**kwargs):
         titles.append(kwargs["title"])
-        return (
-            r"C:\测试\标准序时账.xlsx"
-            if len(titles) == 1
-            else r"C:\测试\科目余额表.xlsx"
-        )
+        return r"C:\测试\标准序时账.xlsx"
 
     monkeypatch.setattr(module, "_dialog_root", Root)
     monkeypatch.setattr("tkinter.filedialog.askopenfilename", askopenfilename)
-    monkeypatch.setattr(
-        "tkinter.filedialog.askdirectory",
-        lambda **kwargs: r"C:\测试\输出",
-    )
 
-    result = module._select_prepare()
+    result = module._select_single_file("journal")
 
     assert result["status"] == "selected"
+    assert result["journal_path"] == r"C:\测试\标准序时账.xlsx"
     assert titles[0] == "选择经序时账分析器处理的标准序时账Excel"
 
 
