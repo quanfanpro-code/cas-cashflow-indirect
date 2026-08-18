@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import json
 from pathlib import Path
 import random
@@ -411,6 +411,7 @@ def _write_config(tmp_path: Path, input_path: Path) -> Path:
         "net_profit_source": "user_provided",
         "net_profit_source_note": "端到端测试客户直接提供净利润",
         "performance_materiality_minor": 100,
+        "financial_entity_flag": False,
         "direct_cfo_minor": 11600,
         "protocol_version": "1.0",
         "code_version": "e2e-test",

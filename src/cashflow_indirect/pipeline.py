@@ -1,4 +1,4 @@
-﻿"""准备、AI停点、定稿、核对和输出的流水线。"""
+"""准备、AI停点、定稿、核对和输出的流水线。"""
 
 from dataclasses import asdict
 import hashlib
@@ -152,7 +152,9 @@ def _spec(config: dict) -> RunSpec:
         or materiality <= 0
     ):
         raise InputProtocolError("实际执行重要性水平必须是正整数")
-    financial_entity_flag = config.get("financial_entity_flag", False)
+    if "financial_entity_flag" not in config:
+        raise InputProtocolError("金融企业标志必须提供")
+    financial_entity_flag = config["financial_entity_flag"]
     if not isinstance(financial_entity_flag, bool):
         raise InputProtocolError("金融企业标志必须是JSON布尔值")
     direct_cfo_minor = config.get("direct_cfo_minor")

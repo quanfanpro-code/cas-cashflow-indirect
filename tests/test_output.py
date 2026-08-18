@@ -1,4 +1,4 @@
-﻿import json
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -263,7 +263,7 @@ def test_workbook_has_fixed_eighteen_sheets_and_manifest_is_portable(
         for entry in manifest["files"]
         if entry["path"] == "现金流量表附表计算结果.xlsx"
     )
-    assert workbook_entry["record_count"] == 18
+    assert workbook_entry["record_count"] == 19
     trace_entry = next(
         entry
         for entry in manifest["files"]
@@ -390,7 +390,7 @@ def test_audit_events_and_index_are_added_to_output_manifest(completed_result):
 
 
 
-def test_rapid_mode_exports_two_sheets_and_sixteen_markdowns(
+def test_rapid_mode_exports_three_sheets_and_sixteen_markdowns(
     completed_result,
     rule_book,
 ):
@@ -411,7 +411,7 @@ def test_rapid_mode_exports_two_sheets_and_sixteen_markdowns(
         for entry in manifest["files"]
         if entry["path"] == "现金流量表附表计算结果.xlsx"
     )
-    assert workbook_entry["record_count"] == 2
+    assert workbook_entry["record_count"] == 3
     md_entries = [
         entry
         for entry in manifest["files"]

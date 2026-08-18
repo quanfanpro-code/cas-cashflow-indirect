@@ -23,3 +23,17 @@ def test_技能说明引导金融企业标志():
 
     assert "financial_entity_flag" in 内容
     assert "金融企业" in 内容
+
+
+def test_正式输入协议与现行交互口径一致():
+    协议 = (
+        技能目录
+        / "references"
+        / "协议"
+        / "现金流量表附表间接法_正式输入协议.md"
+    ).read_text(encoding="utf-8-sig")
+
+    assert "financial_entity_flag" in 协议
+    assert "输出目录不通过窗口选择" in 协议
+    assert "直接输入绝对路径" in 协议
+    assert "3. 输出目录；" not in 协议

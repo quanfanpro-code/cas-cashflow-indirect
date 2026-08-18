@@ -1,4 +1,4 @@
-﻿"""正式机器结果和Excel结果输出（标准18张表底稿或急速2表加MD）。"""
+"""正式机器结果和Excel结果输出（标准19张表底稿或急速3表加MD）。"""
 
 import json
 from pathlib import Path
@@ -289,7 +289,7 @@ def export_results(
             "workbook_validation": workbook_validation,
         },
     )
-    workbook_sheet_count = 2 if output_mode == "rapid" else 18
+    workbook_sheet_count = 3 if output_mode == "rapid" else 19
     record_counts = {
         paths["result_summary"]: 1,
         paths["adjustment_summary"]: len(item_summary),

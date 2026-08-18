@@ -1,4 +1,4 @@
-﻿import json
+import json
 from pathlib import Path
 import shutil
 
@@ -176,6 +176,7 @@ def minimal_config(tmp_path):
         "net_profit_source": "user_provided",
         "net_profit_source_note": "测试客户直接提供净利润",
         "performance_materiality_minor": 50000,
+        "financial_entity_flag": False,
         "direct_cfo_minor": 0,
         "protocol_version": "1.0",
         "code_version": "test-code",
@@ -960,6 +961,18 @@ def test_prepare_rejects_invalid_run_spec(
     _update_config(minimal_config, **{field: value})
 
     with pytest.raises(InputProtocolError, match=message):
+        prepare_run(minimal_config)
+
+
+def test_prepare_rejects_missing_financial_entity_flag(minimal_config):
+    config = json.loads(minimal_config.read_text(encoding="utf-8-sig"))
+    config.pop("financial_entity_flag", None)
+    minimal_config.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2),
+        encoding="utf-8-sig",
+    )
+
+    with pytest.raises(InputProtocolError, match="金融企业标志"):
         prepare_run(minimal_config)
 
 
