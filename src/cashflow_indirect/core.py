@@ -92,10 +92,55 @@ def mark_technical_closing_lines(
         & (direction_matches | explicit_closing_rule)
         & ~contrary
     )
-    result["closing_evidence"] = ""
-    result.loc[result["technical_closing"], "closing_evidence"] = (
-        "损益类科目＋结转对方＋方向或显式结转规则成立＋无反证"
+    # 同一凭证内同一一级科目的明细行金额对称互抵（如利息收支互抵、不过本年利润），
+    # 不产生新损益，按技术性行过滤，避免串入调节项目；
+    # 分组字段缺失时（如单测夹具）跳过该规则。
+    summary_text = result["summary"].fillna("").astype(str)
+    if {"voucher_id", "level1_account_code"}.issubset(result.columns):
+        group_by = [result["voucher_id"], result["level1_account_code"]]
+        signed = result["signed_minor"]
+        # 仅当凭证内没有本年利润/利润分配行承接结转时，
+        # 同科目互抵才认定为内部对转；正常结转凭证不受影响。
+        has_pl_line = (
+            result["level1_account_code"].isin(["4103", "4104"])
+            | result["counterparty_level1"]
+            .fillna("")
+            .astype(str)
+            .str.contains("本年利润|利润分配", regex=True)
+        )
+        voucher_without_pl = ~has_pl_line.groupby(
+            result["voucher_id"]
+        ).transform("any")
+        group_offset = (
+            summary_text.str.contains("结转", regex=False)
+            & voucher_without_pl
+            & signed.groupby(group_by).transform("sum").eq(0)
+            & signed.groupby(group_by).transform("size").ge(2)
+            & signed.gt(0).groupby(group_by).transform("any")
+            & signed.lt(0).groupby(group_by).transform("any")
+            & is_profit_loss
+        )
+        # 仅排除组内费用转出方向（signed<0）的结转行：它们会冲掉第9项
+        # 对利息支出的加回；收益转出行（signed>0）保留，与计提行对冲，
+        # 维持利息收入不调整的口径。
+        internal_offset = group_offset & signed.lt(0)
+    else:
+        internal_offset = pd.Series(False, index=result.index)
+    newly_offset = internal_offset & ~result["technical_closing"]
+    result["closing_evidence"] = result.get("closing_evidence", "")
+    result["closing_evidence"] = result["closing_evidence"].fillna("")
+    result.loc[newly_offset, "closing_evidence"] = (
+        "同凭证同科目明细互抵为零＋摘要含结转＋无本年利润对面行"
     )
+    result["technical_closing"] = (
+        result["technical_closing"] | internal_offset
+    )
+    default_evidence = "损益类科目＋结转对方＋方向或显式结转规则成立＋无反证"
+    mask_default = (
+        result["technical_closing"].fillna(False)
+        & result["closing_evidence"].eq("")
+    )
+    result.loc[mask_default, "closing_evidence"] = default_evidence
     return result
 
 

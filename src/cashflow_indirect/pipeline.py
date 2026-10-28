@@ -478,6 +478,12 @@ def _family_results(
     periodic_mask = account.str.contains(
         "折旧费|折耗|无形资产摊销|长期待摊费用摊销",
         regex=True,
+    ) | (
+        # 科目名为“固定资产折旧”等未带“费”字的折旧，按损益侧计提识别；
+        # 排除“累计折旧”科目，避免与损益侧同一笔折旧重复取数。
+        affects_profit
+        & account.str.contains("折旧", regex=False)
+        & ~account.str.contains("累计折旧", regex=False)
     )
     long_prepaid_writeoff_mask = (
         affects_profit
@@ -505,7 +511,13 @@ def _family_results(
         noncash_input["asset_class"] = noncash_text.map(_asset_class)
         noncash_input["event_kind"] = ""
         noncash_input.loc[
-            noncash_input["account_name"].str.contains("折旧费"),
+            noncash_input["account_name"].str.contains("折旧费", regex=False)
+            | (
+                noncash_input["account_name"].str.contains("折旧", regex=False)
+                & ~noncash_input["account_name"].str.contains(
+                    "累计折旧", regex=False
+                )
+            ),
             "event_kind",
         ] = "depreciation"
         noncash_input.loc[
