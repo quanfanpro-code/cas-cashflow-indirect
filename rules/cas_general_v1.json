@@ -1,137 +1,308 @@
 {
   "schema_version": "1.0",
-  "rule_version": "cas_general_2026-08-01",
+  "rule_version": "cas_general_2026-10-29",
   "items": [
     {
       "item_no": 1,
       "name": "资产减值准备",
       "family": "impairment",
-      "rule_ids": ["IMP-ASSET"],
-      "official_source_ids": ["CAS1", "CAS3", "CAS4", "CAS5", "CAS6", "CAS8", "CAS22", "CAS42", "FORMAT2019"]
+      "rule_ids": [
+        "IMP-ASSET"
+      ],
+      "official_source_ids": [
+        "CAS1",
+        "CAS3",
+        "CAS4",
+        "CAS5",
+        "CAS6",
+        "CAS8",
+        "CAS22",
+        "CAS42",
+        "FORMAT2019"
+      ]
     },
     {
       "item_no": 2,
       "name": "信用减值准备",
       "family": "impairment",
-      "rule_ids": ["IMP-CREDIT"],
-      "official_source_ids": ["CAS22", "FORMAT2019"]
+      "rule_ids": [
+        "IMP-CREDIT"
+      ],
+      "official_source_ids": [
+        "CAS22",
+        "FORMAT2019"
+      ]
     },
     {
       "item_no": 3,
       "name": "折旧、折耗",
       "family": "noncash_assets",
-      "rule_ids": ["NONCASH-DEPRECIATION"],
-      "official_source_ids": ["CAS3", "CAS4", "CAS5", "CAS21", "CAS27", "CAS42", "CAS31"]
+      "rule_ids": [
+        "NONCASH-DEPRECIATION"
+      ],
+      "official_source_ids": [
+        "CAS3",
+        "CAS4",
+        "CAS5",
+        "CAS21",
+        "CAS27",
+        "CAS42",
+        "CAS31"
+      ]
     },
     {
       "item_no": 4,
       "name": "无形资产摊销",
       "family": "noncash_assets",
-      "rule_ids": ["NONCASH-INTANGIBLE-AMORTIZATION"],
-      "official_source_ids": ["CAS6", "CAS31"]
+      "rule_ids": [
+        "NONCASH-INTANGIBLE-AMORTIZATION"
+      ],
+      "official_source_ids": [
+        "CAS6",
+        "CAS31"
+      ]
     },
     {
       "item_no": 5,
       "name": "长期待摊费用摊销",
       "family": "noncash_assets",
-      "rule_ids": ["NONCASH-LONG-PREPAID"],
-      "official_source_ids": ["CAS31", "FORMAT2019"]
+      "rule_ids": [
+        "NONCASH-LONG-PREPAID"
+      ],
+      "official_source_ids": [
+        "CAS31",
+        "FORMAT2019"
+      ]
     },
     {
       "item_no": 6,
       "name": "长期资产处置损失",
       "family": "noncash_assets",
-      "rule_ids": ["NONCASH-LONG-ASSET-DISPOSAL"],
-      "official_source_ids": ["CAS4", "CAS6", "CAS42", "CAS31"]
+      "rule_ids": [
+        "NONCASH-LONG-ASSET-DISPOSAL"
+      ],
+      "official_source_ids": [
+        "CAS4",
+        "CAS6",
+        "CAS42",
+        "CAS31"
+      ]
     },
     {
       "item_no": 7,
       "name": "固定资产报废损失",
       "family": "noncash_assets",
-      "rule_ids": ["NONCASH-FIXED-ASSET-SCRAP"],
-      "official_source_ids": ["CAS4", "CAS31"]
+      "rule_ids": [
+        "NONCASH-FIXED-ASSET-SCRAP"
+      ],
+      "official_source_ids": [
+        "CAS4",
+        "CAS31"
+      ]
     },
     {
       "item_no": 8,
       "name": "公允价值变动损失",
       "family": "financial_results",
-      "rule_ids": ["FIN-FAIR-VALUE"],
-      "official_source_ids": ["CAS22", "CAS24", "CAS39", "CAS31"]
+      "rule_ids": [
+        "FIN-FAIR-VALUE"
+      ],
+      "official_source_ids": [
+        "CAS22",
+        "CAS24",
+        "CAS39",
+        "CAS31"
+      ]
     },
     {
       "item_no": 9,
       "name": "不属于经营活动的财务费用",
       "family": "financial_results",
-      "rule_ids": ["FIN-NONOPERATING-FINANCE-COST", "FIN-CASH-FX"],
-      "official_source_ids": ["CAS21", "CAS31"]
+      "rule_ids": [
+        "FIN-NONOPERATING-FINANCE-COST",
+        "FIN-CASH-FX"
+      ],
+      "official_source_ids": [
+        "CAS21",
+        "CAS31"
+      ]
     },
     {
       "item_no": 10,
       "name": "投资损失",
       "family": "financial_results",
-      "rule_ids": ["FIN-INVESTMENT-RESULT"],
-      "official_source_ids": ["CAS22", "CAS31", "FORMAT2019"]
+      "rule_ids": [
+        "FIN-INVESTMENT-RESULT"
+      ],
+      "official_source_ids": [
+        "CAS22",
+        "CAS31",
+        "FORMAT2019"
+      ]
     },
     {
       "item_no": 11,
       "name": "递延所得税资产减少",
       "family": "deferred_tax",
-      "rule_ids": ["TAX-DEFERRED-PROFIT-ROUTE", "TAX-DEFERRED-BALANCE-FALLBACK"],
-      "official_source_ids": ["CAS18", "CAS31"]
+      "rule_ids": [
+        "TAX-DEFERRED-PROFIT-ROUTE",
+        "TAX-DEFERRED-BALANCE-FALLBACK"
+      ],
+      "official_source_ids": [
+        "CAS18",
+        "CAS31"
+      ]
     },
     {
       "item_no": 12,
       "name": "递延所得税负债增加",
       "family": "deferred_tax",
-      "rule_ids": ["TAX-DEFERRED-PROFIT-ROUTE", "TAX-DEFERRED-BALANCE-FALLBACK"],
-      "official_source_ids": ["CAS18", "CAS31"]
+      "rule_ids": [
+        "TAX-DEFERRED-PROFIT-ROUTE",
+        "TAX-DEFERRED-BALANCE-FALLBACK"
+      ],
+      "official_source_ids": [
+        "CAS18",
+        "CAS31"
+      ]
     },
     {
       "item_no": 13,
       "name": "存货减少",
       "family": "working_capital",
-      "rule_ids": ["WC-ITEM-13", "WC-NONCASH-COST-OFFSET"],
-      "official_source_ids": ["CAS1", "CAS5", "CAS31"]
+      "rule_ids": [
+        "WC-ITEM-13",
+        "WC-NONCASH-COST-OFFSET"
+      ],
+      "official_source_ids": [
+        "CAS1",
+        "CAS5",
+        "CAS31"
+      ]
     },
     {
       "item_no": 14,
       "name": "经营性应收项目减少",
       "family": "working_capital",
-      "rule_ids": ["WC-ITEM-14"],
-      "official_source_ids": ["CAS22", "CAS31"]
+      "rule_ids": [
+        "WC-ITEM-14"
+      ],
+      "official_source_ids": [
+        "CAS22",
+        "CAS31"
+      ]
     },
     {
       "item_no": 15,
       "name": "经营性应付项目增加",
       "family": "working_capital",
-      "rule_ids": ["WC-ITEM-15"],
-      "official_source_ids": ["CAS21", "CAS31"]
+      "rule_ids": [
+        "WC-ITEM-15"
+      ],
+      "official_source_ids": [
+        "CAS21",
+        "CAS31"
+      ]
     },
     {
       "item_no": 16,
       "name": "其他明确调整",
       "family": "other_adjustments",
-      "rule_ids": ["OTHER-GOVERNMENT-GRANT", "OTHER-DEBT-RESTRUCTURING-REMAINDER", "OTHER-EQUITY-SETTLED-SHARE-PAYMENT"],
-      "official_source_ids": ["CAS11", "CAS12", "CAS16", "CAS31"]
+      "rule_ids": [
+        "OTHER-GOVERNMENT-GRANT",
+        "OTHER-DEBT-RESTRUCTURING-REMAINDER",
+        "OTHER-EQUITY-SETTLED-SHARE-PAYMENT"
+      ],
+      "official_source_ids": [
+        "CAS11",
+        "CAS12",
+        "CAS16",
+        "CAS31"
+      ]
     }
   ],
   "exclusive_groups": [
-    [1, 2],
-    [6, 7, 8, 10]
+    [
+      1,
+      2
+    ],
+    [
+      6,
+      7,
+      8,
+      10
+    ]
   ],
   "paired_offsets": [
-    [3, 13],
-    [4, 13],
-    [5, 13]
+    [
+      3,
+      13
+    ],
+    [
+      4,
+      13
+    ],
+    [
+      5,
+      13
+    ]
   ],
   "account_groups": {
-    "资产减值准备": ["存货跌价准备", "固定资产减值准备", "无形资产减值准备", "商誉减值准备", "长期股权投资减值准备", "投资性房地产减值准备", "在建工程减值准备", "工程物资减值准备", "合同资产减值准备", "使用权资产减值准备", "油气资产减值准备", "生产性生物资产减值准备", "持有待售资产减值准备"],
-    "信用减值准备": ["坏账准备", "贷款损失准备", "债权投资减值准备", "其他债权投资减值准备"],
-    "递延所得税资产": ["递延所得税资产"],
-    "递延所得税负债": ["递延所得税负债"],
-    "存货": ["原材料", "库存商品", "在产品", "周转材料", "发出商品", "开发产品", "消耗性生物资产", "合同履约成本"],
-    "经营性应收": ["应收账款", "应收票据", "应收款项融资", "预付款项", "合同资产", "其他经营性应收"],
-    "经营性应付": ["应付账款", "应付票据", "合同负债", "预收款项", "应付职工薪酬", "应交税费", "其他经营性应付"]
+    "资产减值准备": [
+      "存货跌价准备",
+      "固定资产减值准备",
+      "无形资产减值准备",
+      "商誉减值准备",
+      "长期股权投资减值准备",
+      "投资性房地产减值准备",
+      "在建工程减值准备",
+      "工程物资减值准备",
+      "合同资产减值准备",
+      "使用权资产减值准备",
+      "油气资产减值准备",
+      "生产性生物资产减值准备",
+      "持有待售资产减值准备"
+    ],
+    "信用减值准备": [
+      "坏账准备",
+      "贷款损失准备",
+      "债权投资减值准备",
+      "其他债权投资减值准备"
+    ],
+    "递延所得税资产": [
+      "递延所得税资产"
+    ],
+    "递延所得税负债": [
+      "递延所得税负债"
+    ],
+    "存货": [
+      "原材料",
+      "库存商品",
+      "在产品",
+      "周转材料",
+      "发出商品",
+      "开发产品",
+      "消耗性生物资产",
+      "合同履约成本"
+    ],
+    "经营性应收": [
+      "应收账款",
+      "应收票据",
+      "应收款项融资",
+      "预付款项",
+      "合同资产",
+      "其他经营性应收",
+      "预付账款"
+    ],
+    "经营性应付": [
+      "应付账款",
+      "应付票据",
+      "合同负债",
+      "预收款项",
+      "应付职工薪酬",
+      "应交税费",
+      "其他经营性应付"
+    ]
   },
   "official_sources": {
     "CAS1": "https://kjs.mof.gov.cn/zt/kjzzss/kuaijizhunzeshishi/200806/t20080618_46216.htm",

@@ -505,6 +505,12 @@ def _family_results(
     noncash_input = fragments.loc[
         periodic_mask | long_prepaid_writeoff_mask | disposal_mask
     ].copy()
+    # 损益结转行只是费用在损益科目与本年利润之间的内部转移，不是当期折旧摊销
+    # 本身；不剔除会让第3至7项被结转额冲减（如折旧被月终结转冲回）。
+    if "technical_closing" in noncash_input.columns:
+        noncash_input = noncash_input.loc[
+            ~noncash_input["technical_closing"].fillna(False).astype(bool)
+        ].copy()
     noncash_events: list[dict] = []
     if not noncash_input.empty:
         noncash_text = noncash_input.apply(_joined_text, axis=1)
@@ -929,6 +935,122 @@ def _family_results(
                             }
                         )
 
+    # 余额桥接的非现金跨界剔除与第9项对销：
+    # 一笔分录的两条腿必须同口径——只允许"有现金腿"或"有损益腿"的分录
+    # 把经营科目余额变动带进第13至15项；否则会像单腿计提（借经营应收、
+    # 贷短期借款应计利息）那样把筹资性质变动算进经营净额。
+    noncash_crossscope_rows: list[dict] = []
+    cash_line_mask = (
+        fragments["account_name"]
+        .fillna("")
+        .astype(str)
+        .str.contains("库存现金|银行存款|其他货币资金", regex=True)
+    )
+    profit_line_mask = fragments["account_nature"].fillna("").astype(str).eq(
+        "损益"
+    ) | fragments["account_code"].fillna("").astype(str).str.startswith("6")
+    op_pool_masks = {
+        13: _account_group_mask(fragments, inventory_terms),
+        14: _account_group_mask(fragments, receivable_terms),
+        15: _account_group_mask(fragments, payable_terms),
+    }
+    other_bs_mask = ~cash_line_mask & ~profit_line_mask & ~(
+        op_pool_masks[13] | op_pool_masks[14] | op_pool_masks[15]
+    )
+    handled_voucher_ids = debt_voucher_ids | {
+        str(voucher_id)
+        for voucher_id in fragments.loc[
+            fragments["fragment_id"].astype(str).isin(claimed_by_other_families),
+            "voucher_id",
+        ].astype(str)
+    } | {
+        # 减值通道已按"核销防重复"规则对准备核销原值做过第13至15项修正，
+        # 含减值/准备分录的凭证跳过本规则，防止两通道重复剔除。
+        str(voucher_id)
+        for voucher_id in fragments.loc[
+            fragments["fragment_id"].astype(str).isin(
+                set(impairment_input["fragment_id"].astype(str))
+            ),
+            "voucher_id",
+        ].astype(str)
+    } | {
+        # 股份支付、政府补助凭证同样是无现金无损益的经营腿对权益腿，
+        # 但技能在后续环节已有专门桥接处理，此处跳过防止重复剔除。
+        str(voucher_id)
+        for voucher_id in fragments.loc[
+            text.str.contains("权益结算股份支付|政府补助", regex=True),
+            "voucher_id",
+        ].astype(str)
+    }
+    # 规则一：无现金腿、无损益腿、经营腿与非经营资产负债腿并存的凭证，
+    # 其经营腿变动属于跨口径非现金结转，从桥接中整笔剔除。
+    for voucher_id, rows in fragments.groupby("voucher_id", sort=False):
+        if str(voucher_id) in handled_voucher_ids:
+            continue
+        index = rows.index
+        if cash_line_mask.loc[index].any() or profit_line_mask.loc[index].any():
+            continue
+        if not other_bs_mask.loc[index].any():
+            continue
+        for item_no, pool_mask in op_pool_masks.items():
+            signed = int(
+                rows.loc[index[pool_mask.loc[index]], "signed_minor"].sum()
+            )
+            if signed:
+                noncash_crossscope_rows.append(
+                    {
+                        "target_item_no": item_no,
+                        "correction_minor": signed,
+                        "reason_code": "NONCASH_CROSSSCOPE_EXCLUSION",
+                    }
+                )
+    # 规则二：第9项已按损益腿取数的（凭证、摘要）组，其挂在经营应收/应付
+    # 上的对方腿同步从桥接中剔除，避免利息计提在损益加回与余额桥接间重复计入。
+    financial_item9_ids: set[str] = set()
+    for frame in claim_frames:
+        if frame.empty or "item_no" not in frame.columns:
+            continue
+        included = frame.loc[
+            frame["item_no"].eq(9) & frame["decision"].eq("included")
+        ]
+        financial_item9_ids.update(included["fragment_id"].astype(str))
+    if financial_item9_ids:
+        fin_rows = fragments.loc[
+            fragments["fragment_id"].astype(str).isin(financial_item9_ids)
+        ]
+        pair_keys = {
+            (str(voucher_id), str(summary))
+            for voucher_id, summary in zip(
+                fin_rows["voucher_id"].astype(str),
+                fin_rows["summary"].astype(str),
+                strict=True,
+            )
+        }
+        grouped = fragments.groupby(
+            [
+                fragments["voucher_id"].astype(str),
+                fragments["summary"].astype(str),
+            ],
+            sort=False,
+        )
+        for (voucher_id, summary), rows in grouped:
+            if (voucher_id, summary) not in pair_keys:
+                continue
+            # 只剔除应付腿：第9项把利息支出从经营加回时，其未付应付腿
+            # 不得再进第15项（两边都加会重复）。利息收入侧的应收腿与
+            # 第14项在收款周期内自然对销，维持原口径不剔除。
+            index = rows.index
+            mask_index = index[op_pool_masks[15].loc[index]]
+            signed = int(rows.loc[mask_index, "signed_minor"].sum())
+            if signed:
+                noncash_crossscope_rows.append(
+                    {
+                        "target_item_no": 15,
+                        "correction_minor": signed,
+                        "reason_code": "FINANCIAL_ITEM9_COUNTERPART_EXCLUSION",
+                    }
+                )
+
     inventory = _enrich_working_capital(
         trial_balance.loc[
             _account_group_mask(trial_balance, inventory_terms)
@@ -956,12 +1078,13 @@ def _family_results(
         if not impairment_records.empty
         else pd.DataFrame()
     )
-    if debt_correction_rows:
+    extra_corrections = list(debt_correction_rows) + noncash_crossscope_rows
+    if extra_corrections:
         corrections = pd.concat(
             [
                 corrections,
                 pd.DataFrame(
-                    debt_correction_rows,
+                    extra_corrections,
                     columns=["target_item_no", "correction_minor", "reason_code"],
                 ),
             ],
