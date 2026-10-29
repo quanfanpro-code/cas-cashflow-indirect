@@ -137,6 +137,46 @@ def mark_technical_closing_lines(
     result["technical_closing"] = (
         result["technical_closing"] | internal_offset
     )
+    # 同一凭证、同一摘要下损益科目之间的跨科目等额互抵（如结账前把
+    # 费用在管理费用与财务费用之间重分类）：不经过本年利润、组内净额
+    # 为零且正负方向并存时，整组认定为内部过账；对方为本年利润/
+    # 利润分配的结转行不在此列（已由主规则识别）。分组统计只在
+    # 损益且非结转对面的行上计算，本年利润承接行不参与。
+    if {"voucher_id", "summary"}.issubset(result.columns):
+        cross_keys = [
+            result["voucher_id"],
+            result["summary"].fillna("").astype(str),
+        ]
+        cross_candidate = (
+            summary_text.str.contains("结转", regex=False)
+            & is_profit_loss
+            & ~result["counterparty_level1"]
+            .fillna("")
+            .astype(str)
+            # 对方为本年利润/利润分配的结转行由主规则识别；
+            # 对方"未找到匹配"的孤立行（如0.01尾差）不构成互抵结构，
+            # 一并排除后组净额才能反映真实配对情况。
+            .str.contains("本年利润|利润分配|未找到匹配", regex=True)
+            & ~result["technical_closing"].fillna(False)
+        )
+        subset_signed = pd.Series(
+            signed.where(cross_candidate),
+            index=result.index,
+        )
+        grouped_signed = subset_signed.groupby(cross_keys)
+        cross_offset = (
+            cross_candidate
+            & grouped_signed.transform("sum").eq(0)
+            & grouped_signed.transform("size").ge(2)
+            & subset_signed.gt(0).groupby(cross_keys).transform("any")
+            & subset_signed.lt(0).groupby(cross_keys).transform("any")
+        )
+        result["technical_closing"] = (
+            result["technical_closing"] | cross_offset.fillna(False)
+        )
+        result.loc[cross_offset.fillna(False), "closing_evidence"] = (
+            "同凭证同摘要损益科目间互抵为零＋不过本年利润"
+        )
     default_evidence = "损益类科目＋结转对方＋方向或显式结转规则成立＋无反证"
     mask_default = (
         result["technical_closing"].fillna(False)

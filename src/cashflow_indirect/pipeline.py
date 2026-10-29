@@ -4,6 +4,7 @@ from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import time
 import tracemalloc
@@ -677,6 +678,14 @@ def _family_results(
                 return "operating_receivable_fx"
             if "汇兑" in value:
                 return "financing_fx"
+            if any(
+                term in value
+                for term in ("短期借款", "长期借款", "应付利息", "应付债券")
+            ):
+                # 利息损益跟着借款走：与借款/应付利息配对的损益行
+                # （含冲回以前计提的红字行），无论挂在哪个明细科目、
+                # 什么方向，按筹资利息处理，优先于利息收入口径。
+                return "financing_interest"
             if "利息收入" in value:
                 # 第9项只调不属于经营活动的财务费用；利息收入不是费用，
                 # 非金融企业的存款及集团统借统贷利息收入按经营活动处理，
@@ -1046,17 +1055,59 @@ def _family_results(
         for (voucher_id, summary), rows in grouped:
             if (voucher_id, summary) not in pair_keys:
                 continue
-            # 只剔除应付腿：第9项把利息支出从经营加回时，其未付应付腿
-            # 不得再进第15项（两边都加会重复）。利息收入侧的应收腿与
-            # 第14项在收款周期内自然对销，维持原口径不剔除。
             index = rows.index
-            mask_index = index[op_pool_masks[15].loc[index]]
-            signed = int(rows.loc[mask_index, "signed_minor"].sum())
-            if signed:
+            claimed = rows["fragment_id"].astype(str).isin(
+                financial_item9_ids
+            )
+            # 只处理与第9项认领行按一级科目真正配对的对方腿；
+            # 同摘要下其他无关事件（如冲回与重挂共用一个摘要）不受影响。
+            counterpart_names: set[str] = set()
+            for value in rows.loc[
+                index[claimed], "counterparty_level1"
+            ].fillna("").astype(str):
+                counterpart_names.update(
+                    part.strip()
+                    for part in re.split(r"[,，;；、/|+\\\s]+", value)
+                    if part
+                )
+            counterpart_leg = (
+                rows["level1_account_name"].fillna("").astype(str).isin(
+                    counterpart_names
+                )
+                & ~claimed
+            )
+            # 应付腿：第9项把利息支出从经营加回时，其未付应付腿
+            # 不得再进第15项（两边都加会重复）。
+            payable_index = index[
+                op_pool_masks[15].loc[index] & counterpart_leg
+            ]
+            payable_signed = int(
+                rows.loc[payable_index, "signed_minor"].sum()
+            )
+            if payable_signed:
                 noncash_crossscope_rows.append(
                     {
                         "target_item_no": 15,
-                        "correction_minor": signed,
+                        "correction_minor": payable_signed,
+                        "reason_code": "FINANCIAL_ITEM9_COUNTERPART_EXCLUSION",
+                    }
+                )
+            # 应收腿只剔除贷方（减少）：与第9项费用非现金互抵的应收
+            # 不是收款；借方（增加）是未来经营收款，保留在第14项，
+            # 与收款周期对销的口径不变。
+            receivable_credit_index = index[
+                op_pool_masks[14].loc[index]
+                & counterpart_leg
+                & rows["signed_minor"].lt(0)
+            ]
+            receivable_credit_signed = int(
+                rows.loc[receivable_credit_index, "signed_minor"].sum()
+            )
+            if receivable_credit_signed:
+                noncash_crossscope_rows.append(
+                    {
+                        "target_item_no": 14,
+                        "correction_minor": receivable_credit_signed,
                         "reason_code": "FINANCIAL_ITEM9_COUNTERPART_EXCLUSION",
                     }
                 )
