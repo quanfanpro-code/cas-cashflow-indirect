@@ -74,7 +74,9 @@ def mark_technical_closing_lines(
     expense = codes.str.startswith(("640", "660", "670", "671", "680"))
     direction_matches = (income & signed.gt(0)) | (expense & signed.lt(0))
     explicit_closing_rule = (
-        result["summary"].fillna("").astype(str).str.contains("结转损益")
+        # "结转损益"与"损益结转"是同一结转动作的两种常见词序
+        # （如"结转损益"/"月末损益结转"），一并识别。
+        result["summary"].fillna("").astype(str).str.contains("结转损益|损益结转")
         & result["match_type"]
         .fillna("")
         .astype(str)

@@ -677,6 +677,11 @@ def _family_results(
                 return "operating_receivable_fx"
             if "汇兑" in value:
                 return "financing_fx"
+            if "利息收入" in value:
+                # 第9项只调不属于经营活动的财务费用；利息收入不是费用，
+                # 非金融企业的存款及集团统借统贷利息收入按经营活动处理，
+                # 不默认剔除（投资类利息已在前面的分支剔除）。
+                return "operating_interest_income"
             return "financing_interest"
 
         financial_input["event_kind"] = financial_text.map(financial_kind)
@@ -957,37 +962,42 @@ def _family_results(
     other_bs_mask = ~cash_line_mask & ~profit_line_mask & ~(
         op_pool_masks[13] | op_pool_masks[14] | op_pool_masks[15]
     )
-    handled_voucher_ids = debt_voucher_ids | {
-        str(voucher_id)
-        for voucher_id in fragments.loc[
-            fragments["fragment_id"].astype(str).isin(claimed_by_other_families),
-            "voucher_id",
-        ].astype(str)
-    } | {
+    skip_fragment_ids = (
+        set(claimed_by_other_families)
         # 减值通道已按"核销防重复"规则对准备核销原值做过第13至15项修正，
-        # 含减值/准备分录的凭证跳过本规则，防止两通道重复剔除。
-        str(voucher_id)
-        for voucher_id in fragments.loc[
-            fragments["fragment_id"].astype(str).isin(
-                set(impairment_input["fragment_id"].astype(str))
-            ),
-            "voucher_id",
-        ].astype(str)
-    } | {
-        # 股份支付、政府补助凭证同样是无现金无损益的经营腿对权益腿，
+        # 含减值/准备分录的业务跳过本规则，防止两通道重复剔除。
+        | set(impairment_input["fragment_id"].astype(str))
+        # 股份支付、政府补助同样是无现金无损益的经营腿对权益腿，
         # 但技能在后续环节已有专门桥接处理，此处跳过防止重复剔除。
-        str(voucher_id)
-        for voucher_id in fragments.loc[
-            text.str.contains("权益结算股份支付|政府补助", regex=True),
-            "voucher_id",
-        ].astype(str)
-    }
-    # 规则一：无现金腿、无损益腿、经营腿与非经营资产负债腿并存的凭证，
+        | set(
+            fragments.loc[
+                text.str.contains("权益结算股份支付|政府补助", regex=True),
+                "fragment_id",
+            ].astype(str)
+        )
+        # 债务重组凭证由专门通道按整凭证处理并自带修正。
+        | set(
+            fragments.loc[
+                fragments["voucher_id"].astype(str).isin(debt_voucher_ids),
+                "fragment_id",
+            ].astype(str)
+        )
+    )
+    # 规则一：按（凭证、摘要）还原业务事件。客户常把互不相干的业务
+    # 合打在一张批量凭证里，凭证级判断会被无关业务的现金腿遮蔽；
+    # 事件级判断无现金腿、无损益腿、经营腿与非经营资产负债腿并存时，
     # 其经营腿变动属于跨口径非现金结转，从桥接中整笔剔除。
-    for voucher_id, rows in fragments.groupby("voucher_id", sort=False):
-        if str(voucher_id) in handled_voucher_ids:
-            continue
+    event_groups = fragments.groupby(
+        [
+            fragments["voucher_id"].astype(str),
+            fragments["summary"].astype(str),
+        ],
+        sort=False,
+    )
+    for _, rows in event_groups:
         index = rows.index
+        if rows["fragment_id"].astype(str).isin(skip_fragment_ids).any():
+            continue
         if cash_line_mask.loc[index].any() or profit_line_mask.loc[index].any():
             continue
         if not other_bs_mask.loc[index].any():
